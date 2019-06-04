@@ -5,6 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$/qmmm" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/tests" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/qmmm/core" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/.ipynb_checkpoints" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.6 (venv3)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
