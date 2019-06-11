@@ -95,6 +95,13 @@ class ConfigBuilder(dict, LoggerMixin):
         self.application(self._application)
         return self
 
+    def __getattr__(self, item):
+        # Fallback method try to get an item by a key
+        if item in self:
+            return self[item]
+        else:
+            return object.__getattribute__(self, item)
+
     def queue(self, partition, **kwargs):
         if self._resource not in REMOTE_CONFIG:
             raise KeyError('"{}" resource is not configured'.format(self._resource))

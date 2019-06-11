@@ -2,6 +2,7 @@ from qmmm.core.lammps.command import Command, CommandStyle
 from qmmm.core.lammps.constraints import PrimitiveConstraint, IterableConstraint, ChoiceConstraint, ReferenceConstraint
 from qmmm.core.lammps.region import Region
 from qmmm.core.lammps.group import Group
+from qmmm.core.lammps.fix import Fix
 
 class Clear(Command):
     Command = 'clear'
@@ -261,4 +262,11 @@ class Create(CommandStyle):
     Args = [
         PrimitiveConstraint('temp', (float, int), help='temperature value (temperature units)'),
         PrimitiveConstraint('seed', (int,), help='random # seed (positive integer)'),
+    ]
+
+class Unfix(Command):
+
+    Command = 'unfix'
+    Args = [
+        ReferenceConstraint('fix-ID', Fix, help='ID of a previously defined fix')
     ]

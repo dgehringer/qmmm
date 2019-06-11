@@ -387,7 +387,6 @@ class RunnerMixin(LoggerMixin):
         cwd = os.getcwd()
         self._chdir(self._calc.working_directory)
         # Start shell
-        print('CURRENT_DIRECTORY:', os.getcwd())
         self._get_shell()
         thr_read_log = self._make_listener_thread(self._calc.log_file)
 

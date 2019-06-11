@@ -1,8 +1,8 @@
 
 from qmmm.core.lammps.command import Command, CommandStyle
-from qmmm.core.lammps.constraints import PrimitiveConstraint, ReferenceConstraint
+from qmmm.core.lammps.constraints import PrimitiveConstraint, ReferenceConstraint, IterableConstraint
 from qmmm.core.lammps.region import Region as RegionCommand
-from qmmm.core.utils import once
+from qmmm.core.utils import once, consecutive_groups
 
 
 class Group(Command):
@@ -68,6 +68,23 @@ class Region(CommandStyle):
     def region(self):
         return RegionCommand.resolve(self._region)
 
+class Id(CommandStyle):
+
+    Style = 'id'
+    Args = [IterableConstraint('id', help='list of one or more atom types, atom IDs, or molecule IDs any entry in list can be a sequence formatted as A:B or A:B:C where  A = starting index, B = ending index, C = increment between indices, 1 if not specified')]
+
+    @classmethod
+    def from_id_list(cls, id_list):
+        id_list = list(sorted(id_list))
+        crumbs = []
+        for group in consecutive_groups(id_list):
+            group_ = list(group)
+            if len(group_) == 1:
+                crumbs.append('{}'.format(group_[0]))
+            else:
+                # It is a consecutive region
+                crumbs.append('{}:{}'.format(group_[0], group_[-1]))
+        return cls(crumbs)
 
 All = Group('all')
 

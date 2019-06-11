@@ -6,6 +6,8 @@ from io import StringIO
 from threading import Thread
 from monty.json import MontyDecoder
 from pymatgen import Structure, Lattice
+from itertools import groupby
+from operator import itemgetter
 import logging
 import hashlib
 
@@ -305,3 +307,9 @@ class SingletonMetaClass(type):
         cls.__new__ = staticmethod(my_new)
 
 
+def consecutive_groups(iterable, ordering=lambda x: x):
+
+    for k, g in groupby(
+        enumerate(iterable), key=lambda x: x[0] - ordering(x[1])
+    ):
+        yield map(itemgetter(1), g)

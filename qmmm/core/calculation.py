@@ -280,7 +280,6 @@ class LAMMPSCalculation(Calculation):
         self._structure_file_final = '{}.final.atoms'.format(name)
         self._input_file = '{}.in'.format(name)
         self._log_file = '{}.log'.format(name)
-        self._region_box = None
         self._num_species = len(set([site.species_string for site in structure]))
         self._runner = LAMMPSRunner()
         self._runner_success = None
@@ -293,6 +292,39 @@ class LAMMPSCalculation(Calculation):
         self._group_write_dumps = {}
         self._dumps = {}
         self._runner_bound = False
+
+        # Order structure as it done by LammpsData
+        # But therefore it is ensure that our id matches that assigned by LammpsData and the ordering is ensured
+        ordered_structure = self._structure.get_sorted_structure()
+        self._structure = ordered_structure.copy()
+
+        if 'id' not in self._structure.site_properties:
+            self._structure.add_site_property('id', [i + 1 for i, _ in enumerate(self._structure)])
+
+        if 'group' in self._structure.site_properties:
+            groups = {}
+            for site in self._structure:
+                site_groups = site.properties['group']
+                site_id = site.properties['id']
+                if site_groups is not None:
+                    # The group is not none
+                    if isinstance(site_groups, str):
+                        site_groups = [site_groups]
+                        # The site is only in one group and it is given explicitly
+                    for group_name in site_groups:
+                        if group_name not in groups:
+                            groups[group_name] = [site_id]
+                        else:
+                            groups[group_name].append(site_id)
+
+            # Add them to the local groups
+            for group_name, ids in groups.items():
+                if group_name not in self._groups:
+                    self._groups[group_name] = [Group(group_name, Group.Id.from_id_list(ids))]
+                else:
+                    self._groups[group_name].append(Group(group_name, Group.Id.from_id_list(ids)))
+
+        self._index_id_map = { i : v for i, v in enumerate(self._structure.site_properties['id']) }
 
     @property
     def input_file(self):
@@ -314,7 +346,8 @@ class LAMMPSCalculation(Calculation):
     def define_atoms(self):
         l = self.structure.lattice
         if not all([isclose(angle, 90, abs_tol=1e-9) for angle in (l.alpha, l.beta, l.gamma)]):
-            raise ValueError('Canno\'t handle simulation boxes which are not orthorhombic')
+            pass
+            #raise ValueError('Canno\'t handle simulation boxes which are not orthorhombic')
 
         return [
             ReadData(join(self._structure_folder, self._structure_file_input), group='all')
@@ -397,6 +430,12 @@ class LAMMPSCalculation(Calculation):
             raise ValueError('pair_coeff argument is missing')
         self._sequence.extend(self.define_initialization())
         self._sequence.extend(self.define_atoms())
+        # Define already defined groups, should be done in the setting
+        for group_name, commands in self._groups.items():
+            # Skip it if it is the 'all' group
+            if group_name == 'all':
+                continue
+            self._sequence.extend(commands)
 
         potential_args = {k: kwargs[k] for k in ['pair_style', 'pair_coeff']}
         self._sequence.extend(self.define_potential(**potential_args))
@@ -408,19 +447,28 @@ class LAMMPSCalculation(Calculation):
             settings = kwargs['settings']
         else:
             settings = None
-
-            # Extract groups
-
+        # Check if some groups were defined here
+        # Get structure and system defined groups
+        old_groups = list(self._groups.keys())
         self._sequence.extend(self.define_settings(settings=settings))
         self._sequence.extend(self.define_preamble())
         self._sequence.extend(self.define_run(commands=commands))
         for command in self._sequence:
             if isinstance(command, Group):
-                # Check if group has style
+                # This groups command was newly define
                 if command.identifier not in self._groups:
                     self._groups[command.identifier] = [command]
                 else:
-                    self._groups[command.identifier].append(command)
+                    # Check if that command is already there
+                    existing_group_commands = self._groups[command.identifier]
+                    command_found = False
+                    for existing_group_command in existing_group_commands:
+                        if existing_group_command == command:
+                            command_found = True
+                            break
+                    if not command_found:
+                        # This command was not found although the group is already registered
+                        self._groups[command.identifier].append(command)
         self._sequence.extend(self.define_epilog())
         # self._sequence.append(Print('__end_of_auto_invoked_calculation__'))
 
@@ -446,7 +494,11 @@ class LAMMPSCalculation(Calculation):
                 item = (slice(None, None, None), list(item))
             elif all(isinstance(v, slice) or is_iterable(v) for v in item):
                 item = item
-        return np.array(self._thermo_data.loc[item])
+        # Check if multiple thermo outputs were generated
+        data = [np.array(thermo_data.loc[item]) for thermo_data in self._thermo_data]
+        if len(data) == 1:
+            data = data[0]
+        return data
 
     def write_input_files(self, *args, **kwargs):
         create_directory(self.working_directory)
@@ -489,13 +541,23 @@ class LAMMPSCalculation(Calculation):
             site_properties = self._final_structure.site_properties
             site_properties['forces'] = np.array(self._final_forces.loc[:, ('fx', 'fy', 'fz')])
             site_properties['id'] = np.array(self._final_forces.loc[:, 'id'])
+
+            property_mapping = {site.properties['id']: {k : v for k, v in site.properties.items() if k not in ['id', 'forces']}  for site in self._structure}
+
+            for key, property in self._structure.site_properties.items():
+                if key not in site_properties:
+                    site_properties[key] = [property_mapping[id_][key] for id_ in site_properties['id']]
+
             # Assign each site the id from the all group dump
 
             self._final_structure = self._final_structure.copy(site_properties=site_properties)
-            self._thermo_data = parse_lammps_log(self.get_path(self._log_file))[0]
+            # Sort by id
+            self._final_structure = self._final_structure.get_sorted_structure(key=lambda s: s.properties['id'])
+            self._thermo_data = parse_lammps_log(self.get_path(self._log_file))
 
             # Reassign column headers of data frame
-            self._thermo_data.columns = list(self._thermo_args)
+            for thermo_data in self._thermo_data:
+                thermo_data.columns = list(self._thermo_args)
 
             # Take care of all other dumps
 
@@ -585,7 +647,7 @@ class LAMMPSCalculation(Calculation):
             for k, v in site.properties.items():
                 site_properties[k].append(v)
 
-        return Structure(self.final_structure.lattice, species, frac_coords, site_properties=site_properties)
+        return Structure(self.final_structure.lattice, species, frac_coords, site_properties=site_properties).get_sorted_structure()
 
     @property
     def groups(self):
@@ -643,11 +705,11 @@ class VASPCalculation(Calculation):
 
         # Group structure sites by species to have nice poscar file
         # But rememeber the id if it's in site_properties
+        ordered_structure = self._structure.get_sorted_structure()
+        self._structure = ordered_structure
         if 'id' not in self._structure.site_properties:
             self._structure.add_site_property('id', [i + 1 for i, _ in enumerate(self._structure)])
 
-        ordered_structure = Structure.from_sites([s for s in self._structure.group_by_types()])
-        self._structure = ordered_structure.copy()
         self._index_id_map = {i: v for i, v in enumerate(self._structure.site_properties['id'])}
 
         self._poscar = Poscar(self.structure)
