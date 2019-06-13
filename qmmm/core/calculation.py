@@ -292,7 +292,7 @@ class LAMMPSCalculation(Calculation):
         self._group_write_dumps = {}
         self._dumps = {}
         self._runner_bound = False
-
+        self._id_mapping = {}
         # Order structure as it done by LammpsData
         # But therefore it is ensure that our id matches that assigned by LammpsData and the ordering is ensured
         ordered_structure = self._structure.get_sorted_structure()
@@ -300,6 +300,10 @@ class LAMMPSCalculation(Calculation):
 
         if 'id' not in self._structure.site_properties:
             self._structure.add_site_property('id', [i + 1 for i, _ in enumerate(self._structure)])
+            self._id_mapping = {i + 1: i+1 for i, _ in enumerate(self._structure)}
+        else:
+            self._id_mapping = {i + 1: v for i, v in enumerate(self._structure.site_properties['id'])}
+
         self._groups_ids['all'] = self._structure.site_properties['id']
         if 'group' in self._structure.site_properties:
             groups = {}
@@ -540,8 +544,11 @@ class LAMMPSCalculation(Calculation):
             # Write forces to site properties
             # Append forces to
             site_properties = self._final_structure.site_properties
+            # Ensure to parse forces in correct order
+            reverse_mapping = {v: k for k, v in self._id_mapping.items()}
             site_properties['forces'] = np.array(self._final_forces.loc[:, ('fx', 'fy', 'fz')])
-            site_properties['id'] = np.array(self._final_forces.loc[:, 'id'])
+            # Assign real previous ids
+            site_properties['id'] = np.array([self._id_mapping[lammps_id] for lammps_id in self._final_forces.loc[:, 'id']])
 
             property_mapping = {site.properties['id']: {k : v for k, v in site.properties.items() if k not in ['id', 'forces']}  for site in self._structure}
 
@@ -636,19 +643,15 @@ class LAMMPSCalculation(Calculation):
         site_properties = {k: [] for k in self.final_structure.site_properties.keys()}
 
         group_ids = self._groups_ids[group]
-        species = []
-        frac_coords = []
+        sites = []
         # Filter structure
         for site in self.final_structure.sites:
             if 'id' not in site.properties:
                 raise KeyError('id not in Structure.site_properties')
             if site.properties['id'] in group_ids:
-                species.append(site.species_string)
-                frac_coords.append(site.frac_coords)
-            for k, v in site.properties.items():
-                site_properties[k].append(v)
+                sites.append(site)
 
-        return Structure(self.final_structure.lattice, species, frac_coords, site_properties=site_properties).get_sorted_structure()
+        return Structure.from_sites(sites).get_sorted_structure()
 
     @property
     def groups(self):
