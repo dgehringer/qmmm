@@ -300,7 +300,7 @@ class LAMMPSCalculation(Calculation):
 
         if 'id' not in self._structure.site_properties:
             self._structure.add_site_property('id', [i + 1 for i, _ in enumerate(self._structure)])
-
+        self._groups_ids['all'] = self._structure.site_properties['id']
         if 'group' in self._structure.site_properties:
             groups = {}
             for site in self._structure:
@@ -323,6 +323,7 @@ class LAMMPSCalculation(Calculation):
                     self._groups[group_name] = [Group(group_name, Group.Id.from_id_list(ids))]
                 else:
                     self._groups[group_name].append(Group(group_name, Group.Id.from_id_list(ids)))
+                self._groups_ids[group_name] = ids
 
         self._index_id_map = { i : v for i, v in enumerate(self._structure.site_properties['id']) }
 
