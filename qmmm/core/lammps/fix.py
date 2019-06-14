@@ -1,4 +1,4 @@
-from .command import Command, KeywordCommandStyle, process_args
+from .command import Command, KeywordCommandStyle, process_args, CommandStyle
 from qmmm.core.lammps.constraints import PrimitiveConstraint, ReferenceConstraint, ChoiceConstraint, IterableConstraint
 from .group import Group
 from ..utils import is_iterable
@@ -349,3 +349,18 @@ class Deform(KeywordCommandStyle):
         par_str = ' ' + ' '.join(param_crumbs) if len(self._parameters) >  0 else ''
 
         return self.Style + arg_str + par_str + kwd_str
+
+
+class Freeze(CommandStyle):
+
+    Style = 'freeze'
+
+class SetForce(CommandStyle):
+
+    Style = 'setforce'
+
+    Args = [
+        PrimitiveConstraint('fx', (float, int), help='force component values'),
+        PrimitiveConstraint('fy', (float, int), help='force component values'),
+        PrimitiveConstraint('fz', (float, int), help='force component values')
+    ]

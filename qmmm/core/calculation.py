@@ -1,3 +1,7 @@
+import numpy as np
+import pickle
+import os
+import tarfile
 from abc import ABCMeta, abstractmethod
 from qmmm.core.event import Event
 from qmmm.core.utils import is_iterable, create_directory, remove_white, LoggerMixin, recursive_as_dict, \
@@ -23,10 +27,6 @@ from tempfile import NamedTemporaryFile
 from shutil import copyfileobj
 from tempfile import TemporaryDirectory
 from qmmm.core.configuration import Configuration
-import numpy as np
-import pickle
-import os
-import tarfile
 from monty.json import MSONable
 from uuid import uuid4
 
@@ -305,11 +305,13 @@ class LAMMPSCalculation(Calculation):
             self._id_mapping = {i + 1: v for i, v in enumerate(self._structure.site_properties['id'])}
 
         self._groups_ids['all'] = self._structure.site_properties['id']
+        reverse_id_mapping = {v : k for k, v in self._id_mapping.items()}
         if 'group' in self._structure.site_properties:
             groups = {}
             for site in self._structure:
                 site_groups = site.properties['group']
-                site_id = site.properties['id']
+                # Ensure to use local Ids
+                site_id = reverse_id_mapping[site.properties['id']]
                 if site_groups is not None:
                     # The group is not none
                     if isinstance(site_groups, str):
@@ -328,8 +330,6 @@ class LAMMPSCalculation(Calculation):
                 else:
                     self._groups[group_name].append(Group(group_name, Group.Id.from_id_list(ids)))
                 self._groups_ids[group_name] = ids
-
-        self._index_id_map = { i : v for i, v in enumerate(self._structure.site_properties['id']) }
 
     @property
     def input_file(self):
@@ -540,12 +540,13 @@ class LAMMPSCalculation(Calculation):
             for group_id, write_dump in self._group_write_dumps.items():
                 write_dump.parse_data(prefix=self.get_path(''))
                 # Store group id's so that each we know which atoms are in which group
-                self._groups_ids[group_id] = np.array(write_dump.data.loc[:, 'id']).tolist()
+                dump_id_list = np.array(write_dump.data.loc[:, 'id']).tolist()
+                assert len(self._groups_ids[group_id]) == len(dump_id_list)
+                self._groups_ids[group_id] = dump_id_list
             # Write forces to site properties
             # Append forces to
             site_properties = self._final_structure.site_properties
             # Ensure to parse forces in correct order
-            reverse_mapping = {v: k for k, v in self._id_mapping.items()}
             site_properties['forces'] = np.array(self._final_forces.loc[:, ('fx', 'fy', 'fz')])
             # Assign real previous ids
             site_properties['id'] = np.array([self._id_mapping[lammps_id] for lammps_id in self._final_forces.loc[:, 'id']])
@@ -640,15 +641,15 @@ class LAMMPSCalculation(Calculation):
         else:
             raise TypeError('Group argument must be a group object or group_id string')
 
-        site_properties = {k: [] for k in self.final_structure.site_properties.keys()}
-
         group_ids = self._groups_ids[group]
         sites = []
         # Filter structure
+        reverse_mapping = {v: k for k, v in self._id_mapping.items()}
         for site in self.final_structure.sites:
             if 'id' not in site.properties:
                 raise KeyError('id not in Structure.site_properties')
-            if site.properties['id'] in group_ids:
+            local_id = reverse_mapping[site.properties['id']]
+            if local_id in group_ids:
                 sites.append(site)
 
         return Structure.from_sites(sites).get_sorted_structure()
