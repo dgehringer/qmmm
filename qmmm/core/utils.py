@@ -8,10 +8,62 @@ from monty.json import MontyDecoder
 from pymatgen import Structure, Lattice
 from itertools import groupby
 from operator import itemgetter
+from pymatgen import Structure
 import logging
 import hashlib
+import numpy as np
+
 
 __ENCODER__ = MontyDecoder()
+
+RESOURCE_DIRECTORY = 'resources'
+LAMMPS_DIRECTORY = 'lammps'
+VASP_DIRECTORY = 'vasp'
+
+
+class HashableSet(set):
+
+    def __hash__(self):
+        return sum([hash(item) for item in self])
+
+class LoggerMixin(object):
+    @property
+    def logger(self):
+        name = '.'.join([
+            self.__module__,
+            self.__class__.__name__
+        ])
+        return logging.getLogger(name)
+
+def ensure_iterable(object):
+    return [object] if not is_iterable(object) else object
+
+
+def is_primitive(thing):
+    #Also a reference is primitve and can be stored in the attributes
+    primitives = (
+    int, float, bool, str, complex, np.bool_, np.int_, np.str_, np.float_, np.complex_, np.ndarray, np.int8, np.int16,
+    np.int32, np.int64, np.float16, np.float32, np.float64)
+    return isinstance(thing, primitives) or thing is None
+
+
+def run_once(calculation, **kwargs):
+    id_file_name = '{}.id'.format(calculation.name)
+    if not exists(id_file_name):
+        with open(id_file_name, 'w') as id_file_handle:
+            id_file_handle.write(calculation.id)
+        # The file does not exist so we definitely have to run the calculation
+        calculation.run(**kwargs)
+        calculation.save()
+        return calculation
+    else:
+        cls = calculation.__class__
+        # Load the id from the file and load the calculation from the pickle file afterwards
+        with open(id_file_name, 'r') as id_file_handle:
+            calculation_id = id_file_handle.read()
+        calc = cls.load(calculation_id)
+        return calc
+
 
 
 def get_configuration_directory():
@@ -20,6 +72,24 @@ def get_configuration_directory():
     except KeyError:
         config_directory = getcwd()
     return config_directory
+
+def group(structure, group='all'):
+    if group == 'all':
+        return structure
+    return Structure.from_sites([site for site in structure if any([g in ensure_iterable(site.properties['group']) for g in ensure_iterable(group)])])
+
+
+def displacements(struct1, struct2):
+    check_id = 'id' in struct1.site_properties and 'id' in struct2.site_properties
+    result = {}
+    for i, (site1, site2) in enumerate(zip(struct1.sites, struct2.sites)):
+        if check_id:
+            assert site1.properties['id'] == site2.properties['id']
+            id_ = site1.properties['id']
+        else:
+            id_ = i + 1
+        result[id_] = site1.coords - site2.coords
+    return result
 
 
 def flatten(l):
@@ -95,7 +165,6 @@ def process_decoded(d):
             modname = None
             classname = None
         if modname and '__meta__' in d and d['__meta__'] == 'builtin.type':
-            print('__CUSTOM__', d)
             # It is a type object
             mod = __import__(modname, globals(), locals(), [classname], 0)
             if hasattr(mod, classname):
@@ -185,15 +254,6 @@ def md5(fname):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest().upper()
-
-class LoggerMixin(object):
-    @property
-    def logger(self):
-        name = '.'.join([
-            self.__module__,
-            self.__class__.__name__
-        ])
-        return logging.getLogger(name)
 
 
 def indent(string):

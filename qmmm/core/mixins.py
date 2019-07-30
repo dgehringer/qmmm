@@ -61,6 +61,7 @@ def get_connection(user, host, config, logger):
         GLOBAL_CONNECTIONS[(user, host)] = (ssh_client, sftp_client, shell_channel, shell_stdin, shell_stdout)
     return GLOBAL_CONNECTIONS[(user, host)]
 
+
 class RemoteRunnerMixin(LoggerMixin):
 
     def __init__(self):
@@ -205,7 +206,6 @@ class RemoteRunnerMixin(LoggerMixin):
                         self._shell_processed_stdout.write(processed)
                     shout.append(processed)
 
-
         # first and last lines of shout/sherr contain a prompt
         if shout and echo_cmd in shout[-1]:
             shout.pop()
@@ -305,8 +305,6 @@ class RemoteRunnerMixin(LoggerMixin):
     def _close(self):
         close_connection(self._user, self._host, self.logger)
 
-
-
     def _process_arguments(self, remote_kwargs):
         processed_args = {}
         for k, v in self._remote_defaults.items():
@@ -323,10 +321,11 @@ class RemoteRunnerMixin(LoggerMixin):
                     processed_args[k] = v
         self._remote_args = processed_args
 
+
 CALCULATION_END_MARK = Configuration()['general/end_mark']
 
-class RunnerMixin(LoggerMixin):
 
+class RunnerMixin(LoggerMixin):
 
     def __init__(self):
         self._calc = None
@@ -338,19 +337,16 @@ class RunnerMixin(LoggerMixin):
         self._shell_output = None
         self._exitcode = None
 
-
     def bind(self, calc):
         self._calc = calc
         self._initialized = True
-        self.logger.info('Bound calculation "{}" in directory "{}"'.format(self._calc.name, self._calc.working_directory))
-
+        self.logger.debug('Bound calculation "{}" in directory "{}"'.format(self._calc.name, self._calc.working_directory))
 
     def unbind(self):
-        self.logger.info(
+        self.logger.debug(
             'Unbound calculation "{}" in directory "{}"'.format(self._calc.name, self._calc.working_directory))
         self._calc = None
         self._initialized = False
-
 
     def _get_shell(self):
         if not self._shell_alive():
@@ -381,7 +377,6 @@ class RunnerMixin(LoggerMixin):
         thr_read_log.start()
         return thr_read_log
 
-
     def _run(self, commands, preamble=None):
         """Method which explicitely runs VASP."""
         cwd = os.getcwd()
@@ -406,7 +401,6 @@ class RunnerMixin(LoggerMixin):
             self._shell_handle.poll(), int)
 
     def _send_command(self, cmd, return_stdout=False, propagate_stdout=True):
-        print(cmd)
         if not self._shell_alive():
             raise RuntimeError('Shell is not open')
 
@@ -439,17 +433,16 @@ class RunnerMixin(LoggerMixin):
 
         return exit_status == 0 if not return_stdout else (exit_status, shout)
 
-
     def _read_output(self, log_file):
         f = self._shell_output
         line = f.readline()
         log_file.write(line)
-        print(line, end='')
+        self.logger.debug(line, end='')
         while CALCULATION_END_MARK not in line.strip():
             line = f.readline()
             if line:
                 log_file.write(line)
-                print(line, end='')
+                self.logger.debug(line, end='')
         # If everything worked old_line should contain the exit status
         line, exitcode = line.strip().split(' ')
         try:

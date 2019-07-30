@@ -4,32 +4,27 @@ import os
 import tarfile
 from abc import ABCMeta, abstractmethod
 from qmmm.core.event import Event
-from qmmm.core.utils import is_iterable, create_directory, remove_white, LoggerMixin, recursive_as_dict, \
-    process_decoded, StructureWrapper
+from qmmm.core.utils import is_iterable, create_directory, LoggerMixin, recursive_as_dict, process_decoded, \
+    StructureWrapper
 from qmmm.core.configuration import get_setting
-from qmmm.core.vasp.archive import TarPotentialArchive, DirectoryPotentialArchive, PotentialException
-from qmmm.core.vasp import potcar_from_string
+from qmmm.core.vasp.archive import construct_potcar
 from qmmm.core.vasp.vasprun import Vasprun
 from os.path import join, exists, isfile
-from qmmm.core.lammps import Command, Clear, Units, Boundary, AtomStyle, Dimension, ReadData, PairStyle, PairCoeff, CommandStyle, \
-    WriteDump, WriteData, ThermoStyle, Thermo, ThermoModify, Group, Dump
+from qmmm.core.lammps import Command, Clear, Units, Boundary, AtomStyle, Dimension, ReadData, \
+    CommandStyle, WriteDump, WriteData, ThermoStyle, Thermo, ThermoModify, Group, Dump
 from qmmm.core.lammps.group import All
 from qmmm.core.runner import VASPRunner, LAMMPSRunner
 from qmmm.core.mongo import get_mongo_client, make_database_config, insert, query
+from qmmm.core.lammps.potential import available_potentials, LAMMPSPotential
 from enum import Enum
 from math import isclose
 from pymatgen.io.lammps.inputs import LammpsData
-from pymatgen.core.periodic_table import Element
-from io import StringIO
 from pymatgen import Structure
 from pymatgen.io.vasp import Potcar, Incar, Kpoints, Poscar, Oszicar, Outcar
-from tempfile import NamedTemporaryFile
-from shutil import copyfileobj
 from tempfile import TemporaryDirectory
 from qmmm.core.configuration import Configuration
 from monty.json import MSONable
 from uuid import uuid4
-
 from pymatgen.io.lammps.outputs import parse_lammps_dumps, parse_lammps_log
 
 
@@ -287,6 +282,7 @@ class LAMMPSCalculation(Calculation):
         self._final_structure = None
         self._thermo_data = None
         self._thermo_style = None
+        self._potential = None
         self._groups = {'all': [All]}
         self._groups_ids = {}
         self._group_write_dumps = {}
@@ -331,6 +327,12 @@ class LAMMPSCalculation(Calculation):
                     self._groups[group_name].append(Group(group_name, Group.Id.from_id_list(ids)))
                 self._groups_ids[group_name] = ids
 
+
+    @property
+    def available_potentials(self):
+        species = [s.species_string for s in self._structure]
+        return available_potentials(species)
+
     @property
     def input_file(self):
         return self._input_file
@@ -358,34 +360,31 @@ class LAMMPSCalculation(Calculation):
             ReadData(join(self._structure_folder, self._structure_file_input), group='all')
         ]
 
-    def define_potential(self, pair_style, pair_coeff):
+    def define_potential(self, potential=None):
         local_sequence = []
-        if isinstance(pair_style, CommandStyle):
-            local_sequence.append(PairStyle(pair_style))
-        elif isinstance(pair_style, Command):
-            local_sequence.append(pair_style)
-        elif isinstance(pair_style, type):
-            if issubclass(pair_style, CommandStyle):
-                local_sequence.append(PairStyle(pair_style()))
-            else:
-                raise ValueError
-        else:
-            raise ValueError
-        if not is_iterable(pair_coeff):
-            pair_coeff = [pair_coeff]
-        for coeff in pair_coeff:
-            if isinstance(coeff, PairCoeff):
-                local_sequence.append(coeff)
-            elif is_iterable(coeff):
-                i, j, args = coeff
-                local_sequence.append(PairCoeff(i, j, args))
-            else:
-                raise ValueError
+        potentials = [potential] if not is_iterable(potential) else potential
+        assert len(potentials) > 0
+        result = []
+        for pot in potentials:
+            if isinstance(pot, str):
+                pot_ = LAMMPSPotential.load(pot)
+                if pot_ is None:
+                    raise ValueError('Potential "{}" does not exist'.format(pot))
+                else:
+                    result.append(pot_)
+            elif isinstance(pot, LAMMPSPotential):
+                result.append(pot)
+
+        self._potential = result
+
+        # Now add the commands to the sequence
+        for pot in result:
+            local_sequence.extend(pot.commands)
 
         return local_sequence
 
-    def define_run(self, commands=None):
-        return commands or []
+    def define_run(self, run=None):
+        return run or []
 
     def define_epilog(self):
         result = [
@@ -404,14 +403,13 @@ class LAMMPSCalculation(Calculation):
             result.insert(0, w)
         return result
 
-    def define_preamble(self):
-
+    def define_output(self, output=None):
         thermo_style = ThermoStyle(ThermoStyle.Custom, list(self._thermo_args))
         self._thermo_style = thermo_style.style
-        return [
+        return output or [
             Thermo(1),
             thermo_style,
-            ThermoModify(format='float %20.15g'),
+            ThermoModify(format='float %20.15g')
         ]
 
     def define_settings(self, settings=None):
@@ -429,10 +427,8 @@ class LAMMPSCalculation(Calculation):
         :return:
         """
         # Assemble command seqence
-        if 'pair_style' not in kwargs:
-            raise ValueError('pair_style argument is missing')
-        if 'pair_coeff' not in kwargs:
-            raise ValueError('pair_coeff argument is missing')
+        if 'potential' not in kwargs:
+            raise ValueError('potential argument is missing')
         self._sequence.extend(self.define_initialization())
         self._sequence.extend(self.define_atoms())
         # Define already defined groups, should be done in the setting
@@ -442,22 +438,25 @@ class LAMMPSCalculation(Calculation):
                 continue
             self._sequence.extend(commands)
 
-        potential_args = {k: kwargs[k] for k in ['pair_style', 'pair_coeff']}
-        self._sequence.extend(self.define_potential(**potential_args))
-        if 'commands' in kwargs:
-            commands = kwargs['commands']
+        self._potential = kwargs['potential']
+        self._sequence.extend(self.define_potential(self._potential))
+        if 'run' in kwargs:
+            run = kwargs['run']
         else:
-            commands = None
+            run = None
         if 'settings' in kwargs:
             settings = kwargs['settings']
         else:
             settings = None
+        if 'output' in kwargs:
+            output = kwargs['output']
+        else:
+            output = None
         # Check if some groups were defined here
         # Get structure and system defined groups
-        old_groups = list(self._groups.keys())
         self._sequence.extend(self.define_settings(settings=settings))
-        self._sequence.extend(self.define_preamble())
-        self._sequence.extend(self.define_run(commands=commands))
+        self._sequence.extend(self.define_output(output=output))
+        self._sequence.extend(self.define_run(run=run))
         for command in self._sequence:
             if isinstance(command, Group):
                 # This groups command was newly define
@@ -513,9 +512,15 @@ class LAMMPSCalculation(Calculation):
         lammps_data = LammpsData.from_structure(self._structure, atom_style='atomic')
         lammps_data.write_file(self.get_path(self._structure_folder, self._structure_file_input))
 
+        # Write control file
         with open(self.get_path(self._input_file), 'w') as input_file:
             for command in self._sequence:
                 input_file.write(str(command))
+
+        # Write potential files
+        for potential in self._potential:
+            with open(self.get_path(potential.file_name), 'wb') as potential_file:
+                potential_file.write(potential.data)
 
     def success(self, *args, **kwargs):
         success = True
@@ -680,33 +685,12 @@ class LAMMPSCalculation(Calculation):
 class VASPCalculation(Calculation):
     XC_FUNCS = ['lda', 'pbe']
 
-    def __init__(self, structure, name, incar, kpoints, potcar=None, working_directory=None, xc_func='pbe'):
+    def __init__(self, structure, name, working_directory=None, xc_func='pbe'):
         if not working_directory:
             working_directory = '{}.vasp'.format(name)
         super(VASPCalculation, self).__init__(structure, name=name, working_directory=working_directory)
         self._runner = VASPRunner()
-        if potcar is not None:
-            if isinstance(potcar, Potcar):
-                self._potcar = potcar
-            elif isinstance(potcar, str):
-                self._potcar = Potcar.from_file(potcar)
-            else:
-                raise TypeError('potcar argument must be of type pymatgen.io.vasp.Potcar or str')
-        self._potcar = potcar
-        if isinstance(kpoints, Kpoints):
-            self._kpoints = kpoints
-        elif isinstance(kpoints, str):
-            self._kpoints = Kpoints.from_file(kpoints)
-        else:
-            raise TypeError('potcar argument must be of type pymatgen.io.vasp.Kpoints or str')
-        if isinstance(incar, Incar):
-            self._incar = incar
-        elif isinstance(incar, str):
-            self._incar = Incar.from_file(incar)
-        elif isinstance(incar, dict):
-            self._incar = Incar(params=incar)
-        else:
-            raise TypeError('potcar argument must be of type pymatgen.io.vasp.Incar, dict or str')
+
 
         # Group structure sites by species to have nice poscar file
         # But rememeber the id if it's in site_properties
@@ -718,64 +702,15 @@ class VASPCalculation(Calculation):
         self._index_id_map = {i: v for i, v in enumerate(self._structure.site_properties['id'])}
 
         self._poscar = Poscar(self.structure)
-        self._poscar_species = self._extract_species()
         self._configuration = Configuration()
         self._runner_bound = False
-        if xc_func.lower() == 'gga':
-            xc_func = 'pbe'
-        self._xc_func = xc_func.lower()
-
-        potential_archive_setting_name = '{}_potential_archive'.format(self._xc_func)
-        potential_archive_path = get_setting(potential_archive_setting_name)
-        if potential_archive_path is None:
-            raise PotentialException('No potential archive set for XC functional "{}". Either set {} environment '
-                                     'variable or specify {} in the "general" section '
-                                     'in the settings file'.format(self._xc_func,
-                                                                   potential_archive_setting_name.upper(),
-                                                                   potential_archive_setting_name))
-        self._potential_archive = TarPotentialArchive(potential_archive_path) \
-            if isfile(potential_archive_path) else DirectoryPotentialArchive(potential_archive_path)
-        # Construct POTCAR if it was not yet created
-        if self._potcar is None:
-            self._construct_potcar()
-
+        self._xc_func = None
         self._log_file = '{}.log'.format(name)
         self._vasprun = None
         self._oszicar = None
         self._outcar = None
         self._final_structure = None
         self._final_energy = None
-
-    def _construct_potcar(self):
-        archive = self._potential_archive
-        functional = self._xc_func
-        with NamedTemporaryFile() as final:
-            for element in self._poscar_species:
-                try:
-                    default_potential = self._configuration[join('potentials', element.lower())]
-                except PotentialException:
-                    self.logger.warning('No default POTCAR found for "{}" for element "{}"'.format(functional, element))
-                    default_potential = element
-                copyfileobj(archive.potcar(default_potential), final)
-            final.seek(0)
-            self._potcar = potcar_from_string(final.read().decode('utf-8'))
-            if not self._poscar_species == [p.element for p in self._potcar]:
-                raise PotentialException('Something went wrong while constructing the POTCAR file')
-
-    def _extract_species(self):
-        with StringIO(self._poscar.get_string()) as poscar:
-            # Skip the first 5 lines
-            for _ in range(5):
-                poscar.readline()
-            element_line = [remove_white(crumb) for crumb in poscar.readline().split(' ') if
-                            remove_white(crumb) != '']
-            try:
-                for element in element_line:
-                    Element(element)
-            except ValueError:
-                return []
-            else:
-                return element_line
 
     def as_dict(self):
         d = super(VASPCalculation, self).as_dict()
@@ -822,20 +757,69 @@ class VASPCalculation(Calculation):
         self._potcar.write_file(self.get_path('POTCAR'))
 
     def initialize(self, *args, **kwargs):
-        pass
+        if 'incar' in kwargs:
+            incar = kwargs['incar']
+        else:
+            raise ValueError('incar argument is missing')
+
+        if isinstance(incar, Incar):
+            self._incar = incar
+        elif isinstance(incar, str):
+            self._incar = Incar.from_file(incar)
+        elif isinstance(incar, dict):
+            self._incar = Incar(params=incar)
+        else:
+            raise TypeError('potcar argument must be of type pymatgen.io.vasp.Incar, dict or str')
+
+        if 'kpoints' in kwargs:
+            kpoints = kwargs['kpoints']
+        else:
+            raise ValueError('kpoints argument is missing')
+
+        if isinstance(kpoints, Kpoints):
+            self._kpoints = kpoints
+        elif isinstance(kpoints, str):
+            self._kpoints = Kpoints.from_file(kpoints)
+        else:
+            raise TypeError('potcar argument must be of type pymatgen.io.vasp.Kpoints or str')
+
+        if 'xc_func' in kwargs:
+            xc_func = kwargs['xc_func']
+        else:
+            xc_func = 'gga'
+        self._xc_func = xc_func
+
+        if 'potcar' in kwargs:
+            potcar = kwargs['potcar']
+        else:
+            potcar = None
+
+        if potcar is not None:
+            if isinstance(potcar, Potcar):
+                self._potcar = potcar
+            elif isinstance(potcar, str):
+                self._potcar = Potcar.from_file(potcar)
+            else:
+                raise TypeError('potcar argument must be of type pymatgen.io.vasp.Potcar or str')
+        else:
+            potcar = construct_potcar(self._poscar,)
+
+        self._potcar = potcar
 
     def process(self, *args, **kwargs):
         # Try to parse all output files
         try:
             self._oszicar = Oszicar(self.get_path('OSZICAR'))
             self._vasprun = Vasprun(self.get_path('vasprun.xml'))
-
-            final_structure = self._vasprun.final_structure
+            #self._final_structure = Poscar.from_file(self.get_path('CONTCAR')).structure
+            self._final_structure = self._vasprun.final_structure
             # Add forces to it
             site_properties = self._structure.site_properties
             site_properties['forces'] = self._vasprun.forces
+            for property_name, values in site_properties.items():
+                self._final_structure.add_site_property(property_name, values)
             self._final_energy = float(self._oszicar.final_energy)
-        except:
+        except Exception as e:
             return False
         else:
             return True
@@ -892,3 +876,19 @@ class VASPCalculation(Calculation):
     def __del__(self):
         if self._runner_bound:
             self._runner.unbind()
+
+    @property
+    def final_structure(self):
+        self._check_ready(raise_error=True)
+        return self._final_structure
+
+
+    @property
+    def oszicar(self):
+        self._check_ready(raise_error=True)
+        return self._oszicar
+
+    @property
+    def vasprun(self):
+        self._check_ready(raise_error=True)
+        return self._vasprun

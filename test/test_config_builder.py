@@ -4,7 +4,7 @@ from unittest import TestCase
 class TestConfigBuilder(TestCase):
     def test_applications(self):
         from qmmm.defaults import ConfigBuilder
-        self.assertListEqual(ConfigBuilder.applications(), ['vasp', 'lammps'])
+        self.assertListEqual(ConfigBuilder.applications(), ['vasp', 'lammps', 'vasp_gam'])
 
     def test_remotes(self):
         from qmmm.defaults import ConfigBuilder

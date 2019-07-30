@@ -1,6 +1,6 @@
 from abc import ABCMeta
 from monty.json import MSONable
-from qmmm.core.utils import fullname, is_iterable, recursive_as_dict, process_decoded
+from qmmm.core.utils import fullname, is_iterable, recursive_as_dict, process_decoded, LoggerMixin
 from qmmm.core.lammps.constraints import Constraint, IterableConstraint
 from uuid import uuid4
 import logging
@@ -100,7 +100,7 @@ def _validate_keyword(cls, kword, value):
         return tuple(ok_vals)
 
 
-class CommandStyle(MSONable, metaclass=SubclassRegistry):
+class CommandStyle(MSONable, LoggerMixin, metaclass=SubclassRegistry):
 
     Args = None
     Style = None
@@ -377,7 +377,7 @@ class KeywordCommandStyle(CommandStyle):
             return False
 
 
-class Command(MSONable, metaclass=SubclassRegistry):
+class Command(MSONable, LoggerMixin, metaclass=SubclassRegistry):
     Command = None
     Args = None
     Keywords = None
@@ -410,7 +410,7 @@ class Command(MSONable, metaclass=SubclassRegistry):
                 # Create an attribute
                 setattr(self, attribute_name, value)
             if len(args) == 0:
-                logging.getLogger(fullname(self)).warning('No command style detected for command "{}"'.format(cls.Command))
+                self.logger.debug('No command style detected for command "{}"'.format(cls.Command))
                 # No style was given
                 self._style = None
             else:

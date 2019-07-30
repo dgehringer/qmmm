@@ -3,12 +3,22 @@ import re
 import tarfile
 from tempfile import mkdtemp
 from os.path import exists, isfile, isdir, join
-from shutil import rmtree
+from shutil import rmtree, copyfileobj
 from pymatgen.io.vasp import Oszicar
+from tempfile import NamedTemporaryFile
+from shutil import copyfileobj
+from io import StringIO
+from qmmm.core.vasp import potcar_from_string
+from tempfile import NamedTemporaryFile
 from os import listdir
-from ..configuration import Configuration
+from os.path import isdir, isfile
+from qmmm.core.configuration import Configuration
+from qmmm.core.utils import get_configuration_directory, VASP_DIRECTORY, RESOURCE_DIRECTORY, LoggerMixin, remove_white
+import logging
 
 settings = Configuration()
+
+POTENTIAL_ARCHIVES = {}
 
 
 class PotentialException(Exception):
@@ -25,7 +35,7 @@ def copy_file(fsrc, fdst, length=16 * 1024):
         fdst.write(buf)
 
 
-class PotentialArchive(object):
+class PotentialArchive(LoggerMixin):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, path):
@@ -72,7 +82,7 @@ class PotentialArchive(object):
 
     def default_potential(self, element):
         try:
-            return settings.get_option('default', element)
+            return settings.get_option('potentials', element)
         except:
             raise PotentialException('No default potential found for {0}'.format(element))
 
@@ -134,6 +144,8 @@ class DirectoryPotentialArchive(PotentialArchive):
                         lambda pth: isdir(join(self.path, pth)) and not pth.startswith('.'), listdir(self.path)
                 )
         )
+        if not self.is_valid_archive():
+            raise PotentialException('{} is not a valid VASP potential archive'.format(path))
 
     def has_potential(self, identifier):
         return identifier in self._potential_directories
@@ -154,14 +166,14 @@ class DirectoryPotentialArchive(PotentialArchive):
     def is_valid_archive(self):
         for potential in self.potentials():
             if not self.is_valid_potential(potential):
-                print(potential)
+                self.logger.warning('{} potential is corrupted'.format(potential))
                 return False
 
-        default_potentials = [settings.get_option('default', option) for option in settings.get_options('default')]
+        default_potentials = [settings.get_option('potentials', option) for option in settings.get_options('potentials')]
 
         for potential in default_potentials:
             if not self.is_valid_potential(potential):
-                print(potential)
+                self.logger.warning('{} default potential is corrupted'.format(potential))
                 return False
         return True
 
@@ -195,17 +207,20 @@ class TarPotentialArchive(PotentialArchive):
         self._tarfile = tarfile.open(path, 'r:*')
         self._tarinfo = self._tarfile.getmembers()
         self._names = list(map(lambda info: info.name, self._tarinfo))
+        if not self.is_valid_archive():
+            raise PotentialException('{} is not a valid VASP potential archive'.format(path))
 
     def is_valid_archive(self):
         for potential in self.potentials():
             if not self.is_valid_potential(potential):
-                print(potential)
+                self.logger.warning('{} default potential is corrupted'.format(potential))
                 return False
 
-        default_potentials = [settings.get_option('default', option) for option in settings.get_options('default')]
+        default_potentials = [settings.get_option('potentials', option) for option in settings.get_options('potentials')]
 
         for potential in default_potentials:
             if not self.is_valid_potential(potential):
+                self.logger.warning('{} potential is corrupted'.format(potential))
                 return False
         return True
 
@@ -265,213 +280,81 @@ class TarPotentialArchive(PotentialArchive):
             return None
 
 
-            # class Directory:
-            # re.findall(r"[-+]?\d*\.\d+|\d+", s)
+def _make_porential_archives():
+    global POTENTIAL_ARCHIVES
+    functionals = ['lda', 'gga']
+    resources_directory = join(get_configuration_directory(), RESOURCE_DIRECTORY, VASP_DIRECTORY)
+    found_directories = [f for f in listdir(resources_directory)
+                         if f in functionals and isdir(join(resources_directory, f))]
 
-
-class DirectoryResultArchive(ResultArchive):
-    def __init__(self, path):
-        super(DirectoryResultArchive, self).__init__(path)
-        if not isdir(path):
-            raise PotentialException('{1}: {0} is not a directory'.format(path, self.__class__.__name__))
-        self._directories = list(
-                filter(
-                        lambda pth: isdir(join(self.path, pth)) and not pth.startswith('.'), listdir(self.path)
-                )
-        )
-        self._kpoints = []
-        self._energies = []
-        self._data = []
-        if self.is_valid_archive():
-            self.incar_path = join(self.path, 'master', 'INCAR')
-            self.poscar_path = join(self.path, 'master', 'POSCAR')
-            self.kpoints_path = join(self.path, 'master', 'KPOINTS')
-            self.potcar_path = join(self.path, 'master', 'POTCAR')
-            self.psctr_path = join(self.path, 'master', 'PSCTR')
-            for directory in self._directories:
-                if directory != 'master':
-                    energy_, kpoints_ = re.findall(r"[-+]?\d*\.\d+|\d+", directory)
-                    energy_, kpoints_ = int(energy_), int(kpoints_)
-                    if kpoints_ not in self._kpoints:
-                        self._kpoints.append(kpoints_)
-                    if energy_ not in self._energies:
-                        self._energies.append(energy_)
-
-                    oszicar_path = join(self.path, directory, 'OSZICAR')
-                    try:
-                        oszicar = Oszicar(oszicar_path)
-                    except:
-                        raise IOError('Could open OSCICAR file "{0}"'.format(oszicar_path))
-                    else:
-                        try:
-                            self._data.append((kpoints_, energy_, float(oszicar.final_energy)))
-                        except:
-                            pass
-        else:
-            raise PotentialException('{1}: {0} is not a valid directory'.format(path, self.__class__.__name__))
-
-    def is_valid_archive(self):
-        incar_path, poscar_path, kpoints_path, potcar_path, psctr_path = \
-            join(self.path, 'master', 'INCAR'), \
-            join(self.path, 'master', 'POSCAR'), \
-            join(self.path, 'master', 'KPOINTS'), \
-            join(self.path, 'master', 'POTCAR'), \
-            join(self.path, 'master', 'PSCTR')
-
-        valid_dirs = True
-        for directory in self._directories:
-            if directory != 'master':
-                integers = re.findall(r"[-+]?\d*\.\d+|\d+", directory)
-                if len(integers) != 2:
-                    valid_dirs = False
-                energy, kpoints = integers
-                try:
-                    energy = int(energy)
-                    kpoints = int(kpoints)
-                except:
-                    valid_dirs = False
-                valid_dirs = exists(join(self.path, directory, 'OSZICAR'))
-            if not valid_dirs:
+    # Search for potential archives
+    for functional_potential_directory in found_directories:
+        # Search at first for .tar.gz files
+        archives = [f for f in listdir(join(resources_directory, functional_potential_directory))
+                    if f.endswith('.tar.gz')]
+        archive_found = False
+        for archive in archives:
+            # Try to find a right potential archive
+            try:
+                functional_archive = TarPotentialArchive(
+                    join(resources_directory, functional_potential_directory, archive))
+            except PotentialException:
+                continue
+            else:
+                # We found a valid potential archive
+                POTENTIAL_ARCHIVES[functional_potential_directory] = functional_archive
+                logging.getLogger().info('Found valid potential archive "{}"'.format(join(resources_directory,
+                                                                                   functional_potential_directory,
+                                                                                   archive)))
+                archive_found = True
                 break
-
-        return exists(incar_path) and exists(poscar_path) and exists(kpoints_path) and exists(potcar_path) and exists(
-                psctr_path) and valid_dirs
-
-    def incar(self):
-        return open(self.incar_path)
-
-    def poscar(self):
-        return open(self.poscar_path)
-
-    def potcar(self):
-        return open(self.potcar_path)
-
-    def kpoints(self):
-        return open(self.kpoints_path)
-
-    def psctr(self):
-        return open(self.psctr_path)
-
-    def kpoint_list(self):
-        return self._kpoints
-
-    def energy_list(self):
-        return self._energies
-
-    def mesh(self):
-        pass
-
-    def data(self):
-        return self._data
+        if not archive_found:
+            try:
+                functional_archive = DirectoryPotentialArchive(join(resources_directory, functional_potential_directory))
+            except PotentialException:
+                logging.getLogger().warning('Could not find a potential archive for functional "{}"'.format(functional_potential_directory))
+            else:
+                POTENTIAL_ARCHIVES[functional_potential_directory] = functional_archive
+                logging.getLogger().info('Found valid potential archive "{}"'.format(join(resources_directory,
+                                                                                   functional_potential_directory)))
 
 
-class TarTesultArchive(ResultArchive):
-    def __init__(self, path):
-        super(TarTesultArchive, self).__init__(path)
-        if not isfile(path):
-            raise PotentialException('{1}: {0} is not a file'.format(path, self.__class__.__name__))
+_make_porential_archives()
+
+def _extract_species(poscar):
+    from pymatgen.core.periodic_table import Element
+    with StringIO(poscar.get_string()) as poscar:
+        # Skip the first 5 lines
+        for _ in range(5):
+            poscar.readline()
+        element_line = [remove_white(crumb) for crumb in poscar.readline().split(' ') if
+                        remove_white(crumb) != '']
+        try:
+            for element in element_line:
+                Element(element)
+        except ValueError:
+            return []
         else:
-            if not path.split('.')[-1] in ['bz2', 'tar', 'gz', 'xz', 'proj']:
-                raise PotentialException('{1}: {0} is not a tar archive'.format(path, self.__class__.__name__))
-
-        self._tarfile = tarfile.open(path, 'r:*')
-        self._tarinfo = self._tarfile.getmembers()
-        self._names = list(map(lambda info: info.name, self._tarinfo))
-        self._kpoints = []
-        self._energies = []
-        self._data = []
-        if self.is_valid_archive():
-            self.incar_path = join('master', 'INCAR')
-            self.poscar_path = join('master', 'POSCAR')
-            self.kpoints_path = join('master', 'KPOINTS')
-            self.potcar_path = join('master', 'POTCAR')
-            self.psctr_path = join('master', 'PSCTR')
-
-            directories = list(filter(lambda inf: inf.isdir(), self._tarinfo))
-
-            temp_oszicar_directory = mkdtemp()
+            return element_line
 
 
-            for directory in directories:
-                if directory.name != 'master':
-                    energy_, kpoints_ = re.findall(r"[-+]?\d*\.\d+|\d+", directory.name)
-                    energy_, kpoints_ = int(energy_), int(kpoints_)
-                    if kpoints_ not in self._kpoints:
-                        self._kpoints.append(kpoints_)
-                    if energy_ not in self._energies:
-                        self._energies.append(energy_)
+def construct_potcar(poscar, xc_func='gga'):
+    archive = POTENTIAL_ARCHIVES[xc_func]
+    functional = xc_func
+    poscar_species = _extract_species(poscar)
+    with NamedTemporaryFile() as final:
+        for element in poscar_species:
+            try:
+                default_potential = settings.get_option('potentials', element.lower())
+            except PotentialException:
+                logging.getLogger().warning('No default POTCAR found for "{}" for element "{}"'.format(functional, element))
+                default_potential = element
+            copyfileobj(archive.potcar(default_potential), final)
+        final.seek(0)
+        potcar = potcar_from_string(final.read().decode('utf-8'))
+        if not poscar_species == [p.element for p in potcar]:
+            raise PotentialException('Something went wrong while constructing the POTCAR file')
+    return potcar
 
-                    oszicar_archive_path = join(directory.name, 'OSZICAR')
-                    oszicar_path = join(temp_oszicar_directory, 'OSZICAR_ENCUT{0}_K{1}'.format(energy_, kpoints_))
-                    #print(oszicar_path, oszicar_path in self._names)
-                    if oszicar_archive_path in self._names:
-                        oszicar_file = open(oszicar_path, "wb")
-                        copy_file(self._tarfile.extractfile(oszicar_archive_path), oszicar_file)
-                        oszicar_file.close()
-                        try:
-                            oszicar = Oszicar(oszicar_path)
-                        except:
-                            raise IOError('Could open OSCICAR file "{0}"'.format(oszicar_path))
-                        else:
-                            try:
-                                self._data.append((kpoints_, energy_, float(oszicar.final_energy)))
-                            except:
-                                pass
 
-            rmtree(temp_oszicar_directory)
 
-    def is_valid_archive(self):
-        incar_path, poscar_path, kpoints_path, potcar_path = \
-            join('master', 'INCAR'), \
-            join('master', 'POSCAR'), \
-            join('master', 'KPOINTS'), \
-            join('master', 'POTCAR')
-
-        directories = list(filter(lambda inf: inf.isdir(), self._tarinfo))
-        valid_dirs = True
-        for directory in directories:
-            if directory.name != 'master':
-                integers = re.findall(r"[-+]?\d*\.\d+|\d+", directory.name)
-                if len(integers) != 2:
-                    valid_dirs = False
-                energy, kpoints = integers
-                try:
-                    energy = int(energy)
-                    kpoints = int(kpoints)
-                except:
-                    valid_dirs = False
-                valid_dirs = join(directory.name, 'OUTCAR') in self._names
-            if not valid_dirs:
-                break
-
-        return incar_path in self._names and \
-               poscar_path in self._names and \
-               potcar_path in self._names and \
-               kpoints_path in self._names and valid_dirs
-
-    def incar(self):
-        return self._tarfile.extractfile(self.incar_path)
-
-    def poscar(self):
-        return self._tarfile.extractfile(self.poscar_path)
-
-    def potcar(self):
-        return self._tarfile.extractfile(self.potcar_path)
-
-    def kpoints(self):
-        return self._tarfile.extractfile(self.kpoints_path)
-
-    def psctr(self):
-        return self._tarfile.extractfile(self.psctr_path)
-
-    def kpoint_list(self):
-        return self._kpoints
-
-    def energy_list(self):
-        return self._energies
-
-    def mesh(self):
-        pass
-
-    def data(self):
-        return self._data
