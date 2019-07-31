@@ -26,13 +26,15 @@ class VASPStatic(GenericVASPCalculation):
 
     def __init__(self, name):
         super(VASPStatic, self).__init__(name)
-        self.setup.initial.calculation = VASPCalculation
-        self.input.initial.kpoints = Kpoints.gamma_automatic((1, 1, 1))
-        self.input.initial.incar = Incar({
+        self.setup.default.calculation = VASPCalculation
+        self.input.default.kpoints = Kpoints.gamma_automatic((1, 1, 1))
+        self.input.default.incar = Incar({
                 'ALGO': 'Fast',
                 'LREAL': 'Auto',
                 'LCHARG': 'False',
-                'IBRION': -1
+                'IBRION': -1,
+                'NSW': 0,
+                'LWAVE': 'False',
             })
 
     def get_calculation_suffix(self):
@@ -43,14 +45,14 @@ class LAMMPSRelaxation(MMCalculation):
 
     def __init__(self, name):
         super(LAMMPSRelaxation, self).__init__(name)
-        self.setup.initial.calculation = LAMMPSCalculation
-        self.input.initial.etol = 1e-8
-        self.input.initial.ftol = 1e-8
-        self.input.initial.maxiter = 1000000
-        self.input.initial.maxeval = 1000000
-        self.input.initial.vmax = 0.01
-        self.input.initial.fix_group = None
-        self.input.initial.relax_box = True
+        self.setup.default.calculation = LAMMPSCalculation
+        self.input.default.etol = 1e-8
+        self.input.default.ftol = 1e-8
+        self.input.default.maxiter = 1000000
+        self.input.default.maxeval = 1000000
+        self.input.default.vmax = 0.01
+        self.input.default.fix_group = None
+        self.input.default.relax_box = True
 
     def make_commands(self, etol=None, ftol=None, maxiter=None, maxeval=None, vmax=None, fix_group=None, relax_box=None, **kwargs):
         command_list = [
@@ -76,7 +78,7 @@ class LAMMPSStatic(MMCalculation):
 
     def __init__(self, name):
         super(LAMMPSStatic, self).__init__(name)
-        self.setup.initial.calculation = LAMMPSCalculation
+        self.setup.default.calculation = LAMMPSCalculation
 
     def make_commands(self, **kwargs):
         return [

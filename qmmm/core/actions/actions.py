@@ -1,6 +1,6 @@
 from qmmm.core.lammps import *
 from qmmm.core.utils import is_iterable, ensure_iterable, run_once, is_primitive
-from qmmm.core.actions.utils import LoggerMixin, IODictionary, Crumb, CombinedInput
+from qmmm.core.actions.utils import LoggerMixin, IODictionary, Crumb, CombinedInput, InputDictionary
 from qmmm.core.calculation import LAMMPSCalculation, Status, VASPCalculation
 from numpy import sum as asum, array, sqrt as asqrt, newaxis, inf as ainf, zeros, amax
 from numpy.linalg import norm
@@ -23,20 +23,12 @@ class ActionState(Enum):
 class Action(LoggerMixin, metaclass=ABCMeta):
 
     def __init__(self, name):
-        self.input = IODictionary()
-        self.input.initial = IODictionary()
+        self.input = InputDictionary()
         self.output = IODictionary()
         self._state = ActionState.Default
         self._valid_states = (ActionState.Default,)
         self._name = name
         self._history = 1
-
-    def input_data(self):
-        result = result = {k: self.input[k] for k in self.input.keys() if k != 'initial'}
-        for k, v in self.input.initial.items():
-            if k not in result:
-                result[k] = v
-        return result
 
 
     @abstractmethod
@@ -70,7 +62,7 @@ class CheckStep(Action):
         super(CheckStep, self).__init__(name)
         self._step = 0
         self._valid_states = (ActionState.Yes, ActionState.No)
-        self.input.initial.max_step = 100
+        self.input.default.max_step = 100
 
     def apply(self, *args, max_step=None):
         self._step += 1
@@ -99,7 +91,7 @@ class CheckForce(Action):
         self._max_force = ainf
         self._valid_states = (ActionState.Yes, ActionState.No)
         self._max_action = None
-        self.input.initial.ftol = 1.0
+        self.input.default.ftol = 1.0
 
     def apply(self, forces, ftol, **kwargs):
         # Find the single biggest force
@@ -125,8 +117,7 @@ class CalculationAction(Action, metaclass=ABCMeta):
 
     def __init__(self, name):
         super(CalculationAction, self).__init__(name)
-        self.setup = IODictionary()
-        self.setup.initial = IODictionary()
+        self.setup = InputDictionary()
         self._calculation = None
         self._step = None
         self._structure = None
@@ -138,15 +129,9 @@ class CalculationAction(Action, metaclass=ABCMeta):
             'scaled': lambda: self._structure.frac_coords,
             'id': lambda: array(self._structure.site_properties['id']),
             'masses': lambda: array([site.specie.atomic_mass for site in self._structure]),
-            'structure': lambda: self._structure
+            'structure': lambda: self._structure,
+            'energy_pot': lambda: self._calculation.potential_energy
         }
-
-    def setup_data(self):
-        result = {k: self.setup[k] for k in self.setup.keys() if k != 'initial'}
-        for k, v in self.setup.initial.items():
-            if k not in result:
-                result[k] = v
-        return result
 
     @abstractmethod
     def get_calculation_suffix(self):
@@ -177,7 +162,7 @@ class CalculationAction(Action, metaclass=ABCMeta):
         return calculation(**input_parameters)
 
     def apply(self, structure, output_keys=None, groups=None, **kwargs):
-        calc = self._make_calculation(structure, **self.setup_data(), **kwargs)
+        calc = self._make_calculation(structure, **self.setup, **kwargs)
         try:
             calc = run_once(calc, **self._get_run_arguments(**kwargs))
         except Exception as e:
@@ -246,9 +231,9 @@ class GradientDescent(Action):
     def __init__(self, name):
         super(GradientDescent, self).__init__(name)
         self._accumulated_force = 0
-        self.input.initial.gamma0 = 0.1
-        self.input.initial.fix_com = False
-        self.input.initial.use_adagrad = True
+        self.input.default.gamma0 = 0.1
+        self.input.default.fix_com = False
+        self.input.default.use_adagrad = True
 
     def apply(self, positions, forces, masses=None, gamma0=None, fix_com=None, use_adagrad=None):
         gamma = gamma0
@@ -277,11 +262,24 @@ class ApplyPositions(Action):
 
     def __init__(self, name):
         super(ApplyPositions, self).__init__(name)
-        self.input.initial.copy = False
-        self.input.initial.groups = None
-        self.input.initial.displacements = False
+        self.input.default.copy = False
+        self.input.default.groups = None
+        self.input.default.displacements = False
 
     def apply(self, positions, structure, copy=None, groups=None, displacements=None, **kwargs):
+        if isinstance(structure, Structure):
+            return {
+                'structure' : self._apply(positions, structure, copy=copy, groups=groups, displacements=displacements, **kwargs)
+            }
+        elif is_iterable(structure):
+            return {
+                'structure': [self._apply(positions, s, copy=copy, groups=groups, displacements=displacements, **kwargs) for s in structure]
+            }
+        else:
+            raise TypeError
+
+    def _apply(self, positions, structure, copy=None, groups=None, displacements=None, **kwargs):
+        assert isinstance(structure, Structure)
         if copy:
             structure = structure.copy()
 
@@ -305,6 +303,4 @@ class ApplyPositions(Action):
             else:
                 site.coords = position
 
-        return {
-            'structure': structure
-        }
+        return structure

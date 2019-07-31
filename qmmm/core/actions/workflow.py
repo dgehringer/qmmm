@@ -49,7 +49,13 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
 
         input_hooks = []
         while self.active_vertex:
-            input_data = self.active_vertex.input_data()
+            print('ACTIVE_VERTEX', self.active_vertex.name)
+            input_data = self.active_vertex.input
+            from pprint import pprint
+            def wrapper(**kwargs):
+
+                pprint(kwargs)
+            wrapper(**dict(self.active_vertex.input))
             # Resolve lambdas
             # input should be fully resolved apply input hooks
             for key_to_apply, input_hook in input_hooks:
@@ -64,8 +70,6 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
                     raise e
                 else:
                     self.logger.info('Input hook successful')
-            from pprint import pprint
-            #pprint(input_data)
 
             output_data = self.active_vertex.apply(**input_data)
 

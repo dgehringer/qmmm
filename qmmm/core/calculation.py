@@ -824,6 +824,11 @@ class VASPCalculation(Calculation):
         else:
             return True
 
+    @property
+    def potential_energy(self):
+        self._check_ready(raise_error=True)
+        return self._final_energy
+
     def execute(self, *args, **kwargs):
         if 'preamble' in kwargs:
             preamble = kwargs['preamble']

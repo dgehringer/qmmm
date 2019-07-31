@@ -3,13 +3,6 @@ from qmmm.core.utils import LoggerMixin, ensure_iterable
 from types import FunctionType, MethodType
 from inspect import getargspec
 
-def requires_arguments(func):
-    args, varargs, varkw, defaults = getargspec(func)
-    if defaults:
-        args = args[:-len(defaults)]
-    return len(args) > 0
-
-
 def is_iterable(o):
     """
     Convenience method to test for an iterator
@@ -26,10 +19,6 @@ def is_iterable(o):
         return False
     else:
         return not isinstance(o, str)
-
-
-# convenience function to ensure the passed argument is iterable
-ensure_iterable = lambda v: v if is_iterable(v) else [v]
 
 
 class CombinedInput(list):
@@ -123,7 +112,6 @@ class Crumb(LoggerMixin):
                                     self.crumb_type.name,
                                     self.name if isinstance(self.name, str) else self.name.__class__.__name__)
 
-
     def __hash__(self):
         crumb_hash = hash(self._crumb_type)
         if self._crumb_type == CrumbType.Root:
@@ -145,7 +133,6 @@ class Crumb(LoggerMixin):
                 return self.name == other.name
         else:
             return False
-
 
 
 class Path(list, LoggerMixin):
@@ -230,37 +217,42 @@ class Pointer(LoggerMixin):
             crumb = path.pop(0)
             crumb_type = crumb.crumb_type
             crumb_name = crumb.name
-
+            # If the result is a pointer itself we have to resolve it first
+            if isinstance(result, Pointer):
+                self.logger.info('Resolved pointer in a pointer path')
+                result = ~result
+            if isinstance(crumb_name, Pointer):
+                self.logger.info('Resolved pointer in a pointer path')
+                crumb_name = ~crumb_name
             # Resolve it with the correct method - dig deeper
             if crumb_type == CrumbType.Attribute:
                 try:
                     result = getattr(result, crumb_name)
-                except AttributeError:
-                    raise
+                except AttributeError as e:
+                    raise e
             elif crumb_type == CrumbType.Item:
                 try:
                     result = result.__getitem__(crumb_name)
-                except TypeError:
-                    raise
-                except KeyError:
-                    raise
+                except (TypeError, KeyError) as e:
+                    raise e
+
             # Get out of resolve mode
         return result
 
     def _resolve_function(self, function):
         """
-        Convenience function to make IODictionary.resolve more readable. If the value is a function or a CombinedInput
-        it calls the resolved functions if the do not require arguments
+        Convenience function to make IODictionary.resolve more readable. If the value is a function it calls the
+        resolved functions if the do not require arguments
 
         Args:
             key (str): the key the value belongs to, just for logging purposes
-            value (object, function or CombinedInput): the object to resolve
+            value (object/function): the object to resolve
 
         Returns:
-            (object or CombinedInput): The return value of the functions, if no functions were passed "value" is returned
+            (object): The return value of the functions, if no functions were passed "value" is returned
         """
         result = function
-        if isinstance(function, (FunctionType, MethodType)):
+        if isinstance(function, (MethodType, FunctionType)):
             # Make sure that the function has not parameters or all parameters start with
             if not requires_arguments(function):
                 try:
@@ -283,34 +275,21 @@ class Pointer(LoggerMixin):
 
 
 class IODictionary(dict, LoggerMixin):
-
     """
-    A dictionary class representing the input parameters of a Command class. The dictionary holds a path which is recipe
+    A dictionary class representing the parameters of a Command class. The dictionary holds a path which is recipe
     that can be resolved at runtime to obtain underlying values. A dictionary instance can hold multiple instances of
     IODictionary as value items which can be resolved into the real values when desired.
     """
-    def __init__(self, **kwargs):
-        super(IODictionary, self).__init__(**kwargs)
 
     def __getattr__(self, item):
-        if item == 'initial':
-            super(IODictionary, self).__getattribute__(item)
         return self.__getitem__(item)
 
     def __getitem__(self, item):
         if item in self.keys():
             value = super(IODictionary, self).__getitem__(item)
             if isinstance(value, Pointer):
-                # Try to resolve the pointer
-                try:
-                    resolved = ~value
-                except (KeyError, AttributeError, TypeError) as e:
-                    #self.logger.exception('Failed to resolve item "{}". I\'ll search in self.initial'.format(item), exc_info=e)
-                    return self._search_initial(item)
-                else:
-                    return resolved
-
-            elif isinstance(value, (list, set, tuple)):
+                return ~value
+            elif isinstance(value, list):  # TODO: Allow other containers than list
                 cls = type(value)
                 return cls([element if not isinstance(element, Pointer) else ~element for element in value])
             else:
@@ -318,17 +297,62 @@ class IODictionary(dict, LoggerMixin):
         return super(IODictionary, self).__getitem__(item)
 
     def __setattr__(self, key, value):
-        if key == 'initial':
-            super(IODictionary, self).__setattr__(key,value)
         super(IODictionary, self).__setitem__(key, value)
 
-    def _search_initial(self, item):
-        if 'initial' not in self.keys():
-            self.logger.info('No intial dictionary found')
-            raise KeyError(item)
+    def resolve(self):
+        """
+        Even though printing the dictionary, or asking for a particular item resolves paths fine, somehow using the **
+        unpacking syntax fails to resolve pointers. This is to cover that issue since I couldn't find anything on
+        google how to modify the ** behaviour.
+        """
+        resolved = {}
+        for key in self.keys():
+            resolved[key] = self.__getitem__(key)
+        return resolved
+
+
+class InputDictionary(IODictionary):
+    """
+    An ``IODictionary`` which is instantiated with a child dictionary to store default values. If a requested item
+    can't be found in this dictionary, a default value is sought.
+    """
+
+    def __init__(self):
+        super(InputDictionary, self).__init__()
+        self.default = IODictionary()
+
+    def __getitem__(self, item):
+        try:
+            return super(InputDictionary, self).__getitem__(item)
+        except KeyError:
+            self.logger.warning('Falling back to default values for key "{}"'.format(item))
+            return self.default.__getitem__(item)
+
+    def __getattr__(self, item):
+        if item == 'default':
+            return object.__getattribute__(self, item)
         else:
-            initial_values = self.initial
-            if item not in initial_values:
-                raise KeyError
-            else:
-                return initial_values[item]
+            return super(InputDictionary, self).__getattr__(item)
+
+    def __setattr__(self, key, value):
+        if key == 'default':
+            object.__setattr__(self, key, value)
+        else:
+            super(InputDictionary, self).__setattr__(key, value)
+
+    def keys(self):
+        both_keys = set(super(InputDictionary, self).keys()).union(self.default.keys())
+        for k in both_keys:
+            yield k
+
+    def values(self):
+        for k in self.keys():
+            yield self[k]
+
+    def items(self):
+        for k in self.keys():
+            yield k, self[k]
+
+    def __iter__(self):
+        # Override to hack ** unpacking
+        return self.keys().__iter__()

@@ -1,6 +1,14 @@
 from math import cos, pi, radians, sin
 from pymatgen import Structure, Lattice
+from ase.utils.geometry import wrap_positions as ase_wrap_positions
+from ase.data import atomic_numbers, covalent_radii
+from pymatgen.io.ase import AseAtomsAdaptor
+from ase.neighborlist import NeighborList
 import numpy as np
+
+
+def ids(structure, sites):
+    return [structure.index(site) for site in sites]
 
 def orthogonalize_hexagonal(structure, atol=0.1):
     structure = structure.copy()
@@ -43,6 +51,7 @@ def layers(structure, atol=None):
             height_classes[fc] = [s]
     return height_classes
 
+
 def spacing(lattice, plane):
     return  2.0 * pi / np.linalg.norm(sum([miller * vec  for vec, miller in zip(lattice.reciprocal_lattice.matrix, plane)]))
 
@@ -56,3 +65,52 @@ def build_shell(structure, seed_sites, distance, include_index=True):
                 shell_sites[index] = site
     return [(k, v) for k, v in shell_sites.items()] if include_index else list(shell_sites.values())
 
+
+def wrap_positions(structure, center=(0.5, 0.5, 0.5), pbc=None, eps=1e-7):
+
+    atoms = AseAtomsAdaptor.get_atoms(structure) if isinstance(structure, Structure) else structure
+    if pbc is None:
+        pbc = atoms.pbc
+    positions = ase_wrap_positions(atoms.positions, atoms.cell,
+                                    pbc, center, eps)
+    return positions
+
+def natural_cutoffs(atoms, mult=1, **kwargs):
+    """Generate a radial cutoff for every atom based on covalent radii.
+
+    The covalent radii are a reasonable cutoff estimation for bonds in
+    many applications such as neighborlists, so function generates an
+    atoms length list of radii based on this idea.
+
+    * atoms: An atoms object
+    * mult: A multiplier for all cutoffs, useful for coarse grained adjustment
+    * kwargs: Symbol of the atom and its corresponding cutoff, used to override the covalent radii
+    """
+    return [kwargs.get(atom.symbol, covalent_radii[atom.number] * mult)
+            for atom in atoms]
+
+
+def build_neighbor_list(atoms, cutoffs=None, **kwargs):
+    """Automatically build and update a NeighborList.
+
+    Parameters:
+
+    atoms : :class:`~ase.Atoms` object
+        Atoms to build Neighborlist for.
+    cutoffs: list of floats
+        Radii for each atom. If not given it will be produced by calling :func:`ase.neighborlist.natural_cutoffs`
+    kwargs: arbitrary number of options
+        Will be passed to the constructor of :class:`~ase.neighborlist.NeighborList`
+
+    Returns:
+
+    return: :class:`~ase.neighborlist.NeighborList`
+        A :class:`~ase.neighborlist.NeighborList` instance (updated).
+    """
+    if cutoffs is None:
+        cutoffs = natural_cutoffs(atoms)
+
+    nl = NeighborList(cutoffs, **kwargs)
+    nl.update(atoms)
+
+    return nl
