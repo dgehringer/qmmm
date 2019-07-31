@@ -5,13 +5,13 @@ import tarfile
 from abc import ABCMeta, abstractmethod
 from qmmm.core.event import Event
 from qmmm.core.utils import is_iterable, create_directory, LoggerMixin, recursive_as_dict, process_decoded, \
-    StructureWrapper
+    StructureWrapper, predicate_generator
 from qmmm.core.configuration import get_setting
 from qmmm.core.vasp.archive import construct_potcar
 from qmmm.core.vasp.vasprun import Vasprun
 from os.path import join, exists, isfile
 from qmmm.core.lammps import Command, Clear, Units, Boundary, AtomStyle, Dimension, ReadData, \
-    CommandStyle, WriteDump, WriteData, ThermoStyle, Thermo, ThermoModify, Group, Dump
+    CommandStyle, WriteDump, WriteData, ThermoStyle, Thermo, ThermoModify, Group, Dump, PairCoeff
 from qmmm.core.lammps.group import All
 from qmmm.core.runner import VASPRunner, LAMMPSRunner
 from qmmm.core.mongo import get_mongo_client, make_database_config, insert, query
@@ -26,7 +26,11 @@ from qmmm.core.configuration import Configuration
 from monty.json import MSONable
 from uuid import uuid4
 from pymatgen.io.lammps.outputs import parse_lammps_dumps, parse_lammps_log
+from pymatgen.core.periodic_table import Element
 
+
+def element_test(s):
+    return isinstance(Element(s), Element)
 
 class Status(Enum):
     NotInitialized = 0
@@ -289,6 +293,7 @@ class LAMMPSCalculation(Calculation):
         self._dumps = {}
         self._runner_bound = False
         self._id_mapping = {}
+        self._species_order = None
         # Order structure as it done by LammpsData
         # But therefore it is ensure that our id matches that assigned by LammpsData and the ordering is ensured
         ordered_structure = self._structure.get_sorted_structure()
@@ -512,9 +517,52 @@ class LAMMPSCalculation(Calculation):
         lammps_data = LammpsData.from_structure(self._structure, atom_style='atomic')
         lammps_data.write_file(self.get_path(self._structure_folder, self._structure_file_input))
 
+        # Check species_order
+        species = self._structure.symbol_set
+        masses = lammps_data.masses['mass'].astype(float).tolist()
+        species_order = []
+        self._species_order = species_order
+        for mass in masses:
+            match = False
+            for specie in species:
+                if isclose(Element(specie).atomic_mass.real, mass):
+                    species_order.append(specie)
+                    match = True
+                    #Break the inner loop
+                    break
+            if not match:
+                raise RuntimeError('Could not manage to map atomic species')
+            # We do not want to get here, lets raise an Exception
+
         # Write control file
         with open(self.get_path(self._input_file), 'w') as input_file:
             for command in self._sequence:
+                if isinstance(command, PairCoeff):
+                    # Get all parts which do not contain species
+                    #
+                    is_element = predicate_generator(element_test)
+                    mask = [is_element(c) for c in command.coeff]
+                    elements = list(filter(is_element, command.coeff))
+                    species_order_ = species_order.copy()
+                    # Ensure that the atoms species in the pair_coeff command match those in the structure file .atoms
+                    if len(elements) > len(species_order):
+                        self.logger.info('Adapting potential command. The potential supports {} but is/are {} is needed'.format(elements, species_order))
+                        while len(mask) > len(species_order)+1:
+                            mask.pop(mask.index(True))
+                        print(mask)
+                        old_cmd = str(command).rstrip()
+                        command.coeff = [c if not m else species_order_.pop(0) for c, m in zip(command.coeff, mask)]
+                        self.logger.info('Adapted "pair_coeff" command from "{}" to "{}"'.format(old_cmd, str(command).rstrip()))
+                    elif len(elements) == len(species_order):
+                        if not elements == species_order:
+                            old_cmd = str(command).rstrip()
+                            command.coeff = [c if not m else species_order_.pop(0) for c, m in zip(command.coeff, mask)]
+                            self.logger.info('Adapted "pair_coeff" command from "{}" to "{}"'.format(old_cmd, str(command).rstrip()))
+                        else:
+                            self.logger.info('Potential is OK!')
+                    else:
+                        raise RuntimeError('An error ocurred while adapting the potential command')
+
                 input_file.write(str(command))
 
         # Write potential files

@@ -21,6 +21,17 @@ LAMMPS_DIRECTORY = 'lammps'
 VASP_DIRECTORY = 'vasp'
 
 
+def predicate_generator(test):
+
+    def _predicate_wrapper(element):
+        try:
+            result = test(element)
+        except:
+            return False
+        else:
+            return result
+    return _predicate_wrapper
+
 class HashableSet(set):
 
     def __hash__(self):
@@ -72,11 +83,6 @@ def get_configuration_directory():
     except KeyError:
         config_directory = getcwd()
     return config_directory
-
-def group(structure, group='all'):
-    if group == 'all':
-        return structure
-    return Structure.from_sites([site for site in structure if any([g in ensure_iterable(site.properties['group']) for g in ensure_iterable(group)])])
 
 
 def displacements(struct1, struct2):

@@ -4,6 +4,7 @@ from ase.utils.geometry import wrap_positions as ase_wrap_positions
 from ase.data import atomic_numbers, covalent_radii
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.neighborlist import NeighborList
+from qmmm.core.utils import ensure_iterable
 import numpy as np
 
 
@@ -51,6 +52,17 @@ def layers(structure, atol=None):
             height_classes[fc] = [s]
     return height_classes
 
+
+def group(structure, group='all'):
+    if group == 'all':
+        return structure
+    return Structure.from_sites([site for site in structure if any([g in ensure_iterable(site.properties['group']) for g in ensure_iterable(group)])])
+
+
+def indices(structure, group='all'):
+    if group == 'all':
+        return np.arange(len(structure))
+    return np.array([i for i, site in enumerate(structure.sites) if any([g in ensure_iterable(site.properties['group']) for g in ensure_iterable(group)])])
 
 def spacing(lattice, plane):
     return  2.0 * pi / np.linalg.norm(sum([miller * vec  for vec, miller in zip(lattice.reciprocal_lattice.matrix, plane)]))

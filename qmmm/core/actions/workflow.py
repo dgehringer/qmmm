@@ -1,20 +1,26 @@
 from abc import ABCMeta, abstractmethod
 from qmmm.core.utils import LoggerMixin, ensure_iterable
-from qmmm.core.actions.utils import IODictionary, Crumb
+from qmmm.core.actions.utils import IODictionary, InputDictionary
 from qmmm.core.actions.actions import Action, ActionState
+from qmmm.core.event import Event
+
 
 class Workflow(LoggerMixin, metaclass=ABCMeta):
 
     def __init__(self, name):
         self._name = name
-        self.input = IODictionary(root=self, parents=Crumb.attribute('input'))
-        self.output = IODictionary(root=self, parents=Crumb.attribute('output'))
+        self.input = InputDictionary()
+        self.output = IODictionary()
         self._vertices = {}
         self._edges = {}
         self._active_vertex = None
         self._attribute_vertex_name_mapping = {}
         self.define_workflow()
         self.define_dataflow()
+        self.finished = Event()
+        self.started = Event()
+        self.vertex_processing = Event()
+        self.vertex_processed = Event()
 
     def __setattr__(self, key, value):
         if isinstance(value, Action):
@@ -43,39 +49,37 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
     def define_dataflow(self):
         raise NotImplementedError
 
+    def _execute_vertex(self, vertex, input_hooks):
+        input_data = vertex.input
+        # Resolve lambdas
+        # input should be fully resolved apply input hooks
+        for key_to_apply, input_hook in input_hooks:
+            if key_to_apply not in vertex.input:
+                self.logger.warning('Cannot apply input_hook to key {}'.format(key_to_apply))
+                continue
+            try:
+                input_data[key_to_apply] = input_hook(input_data[key_to_apply])
+            except Exception as e:
+                self.logger.exception('An error ocurred while executing input_hook "{}"'.format(key_to_apply),
+                                      exc_info=e)
+                raise e
+            else:
+                self.logger.info('Input hook successful')
+        output_data = vertex.apply(**input_data)
+
+        if output_data is not None:
+            self.append_output(vertex, output_data)
+
     def run(self):
         if not self.active_vertex:
             raise ValueError('active_vertex is not set')
-
+        self.started.fire()
         input_hooks = []
         while self.active_vertex:
-            print('ACTIVE_VERTEX', self.active_vertex.name)
-            input_data = self.active_vertex.input
-            from pprint import pprint
-            def wrapper(**kwargs):
-
-                pprint(kwargs)
-            wrapper(**dict(self.active_vertex.input))
-            # Resolve lambdas
-            # input should be fully resolved apply input hooks
-            for key_to_apply, input_hook in input_hooks:
-                if key_to_apply not in self.active_vertex.input:
-                    self.logger.warning('Cannot apply input_hook to key {}'.format(key_to_apply))
-                    continue
-                try:
-                    input_data[key_to_apply] = input_hook(input_data[key_to_apply])
-                except Exception as e:
-                    self.logger.exception('An error ocurred while executing input_hook "{}"'.format(key_to_apply),
-                                          exc_info=e)
-                    raise e
-                else:
-                    self.logger.info('Input hook successful')
-
-            output_data = self.active_vertex.apply(**input_data)
-
-            if output_data is not None:
-                self.append_output(self.active_vertex, output_data)
-
+            self.logger.info('{}.active_vertex={}'.format(self.name, self.active_vertex.name))
+            self.vertex_processing.fire(self.active_vertex)
+            self._execute_vertex(self.active_vertex, input_hooks)
+            self.vertex_processed.fire(self.active_vertex)
             # Current vertex, find next one
             next_vertex_key = (self.active_vertex, self.active_vertex.state)
             if next_vertex_key in self._edges:
@@ -86,6 +90,7 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
 
             input_hooks = hooks
             self.active_vertex = next_vertex
+        self.finished.fire()
 
     def append_output(self, vertex, output_data):
         for key, value in output_data.items():

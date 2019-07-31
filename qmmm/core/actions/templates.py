@@ -46,8 +46,8 @@ class LAMMPSRelaxation(MMCalculation):
     def __init__(self, name):
         super(LAMMPSRelaxation, self).__init__(name)
         self.setup.default.calculation = LAMMPSCalculation
-        self.input.default.etol = 1e-8
-        self.input.default.ftol = 1e-8
+        self.input.default.etol = 1e-10
+        self.input.default.ftol = 1e-10
         self.input.default.maxiter = 1000000
         self.input.default.maxeval = 1000000
         self.input.default.vmax = 0.01

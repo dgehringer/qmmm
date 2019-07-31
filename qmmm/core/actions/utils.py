@@ -3,6 +3,44 @@ from qmmm.core.utils import LoggerMixin, ensure_iterable
 from types import FunctionType, MethodType
 from inspect import getargspec
 
+def requires_arguments(func):
+    args, varargs, varkw, defaults = getargspec(func)
+    if defaults:
+        args = args[:-len(defaults)]
+    # It could be a bound method too, having a self parameter
+    if 'self' in args:
+        args.remove('self')
+    return len(args) > 0
+
+
+def resolve_function(function, logger):
+    """
+    Convenience function to make IODictionary.resolve more readable. If the value is a function it calls the
+    resolved functions if the do not require arguments
+
+    Args:
+        function (str): the key the value belongs to, just for logging purposes
+        logger (logger): the logger object
+
+    Returns:
+        (object): The return value of the functions, if no functions were passed "value" is returned
+    """
+    result = function
+    if isinstance(function, (MethodType, FunctionType)):
+        # Make sure that the function has not parameters or all parameters start with
+        if not requires_arguments(function):
+            try:
+                # Get the return value
+                result = function()
+            except Exception as e:
+                logger.exception('Failed to execute callable to resolve values for '
+                                      'path {}'.format(logger.name), exc_info=e)
+            else:
+                logger.debug('Successfully resolved callable for path {}'.format(logger.name))
+        else:
+            logger.warning('Found function, but it takes arguments! I \'ll not resolve it.')
+    return result
+
 def is_iterable(o):
     """
     Convenience method to test for an iterator
@@ -240,32 +278,8 @@ class Pointer(LoggerMixin):
         return result
 
     def _resolve_function(self, function):
-        """
-        Convenience function to make IODictionary.resolve more readable. If the value is a function it calls the
-        resolved functions if the do not require arguments
+        return resolve_function(function, self.logger)
 
-        Args:
-            key (str): the key the value belongs to, just for logging purposes
-            value (object/function): the object to resolve
-
-        Returns:
-            (object): The return value of the functions, if no functions were passed "value" is returned
-        """
-        result = function
-        if isinstance(function, (MethodType, FunctionType)):
-            # Make sure that the function has not parameters or all parameters start with
-            if not requires_arguments(function):
-                try:
-                    # Get the return value
-                    result = function()
-                except Exception as e:
-                    self.logger.exception('Failed to execute callable to resolve values for '
-                                          'path {}'.format(self), exc_info=e)
-                else:
-                    self.logger.debug('Successfully resolved callable for path {}'.format(self))
-            else:
-                self.logger.warning('Found function, but it takes arguments! I \'ll not resolve it.')
-        return result
 
     def __invert__(self):
         return self.resolve()
@@ -293,7 +307,7 @@ class IODictionary(dict, LoggerMixin):
                 cls = type(value)
                 return cls([element if not isinstance(element, Pointer) else ~element for element in value])
             else:
-                return value
+                return value if not callable(value) else resolve_function(value, self.logger)
         return super(IODictionary, self).__getitem__(item)
 
     def __setattr__(self, key, value):

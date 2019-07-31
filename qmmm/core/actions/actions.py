@@ -130,7 +130,7 @@ class CalculationAction(Action, metaclass=ABCMeta):
             'id': lambda: array(self._structure.site_properties['id']),
             'masses': lambda: array([site.specie.atomic_mass for site in self._structure]),
             'structure': lambda: self._structure,
-            'energy_pot': lambda: self._calculation.potential_energy
+            'potential_energy': lambda: self._calculation.potential_energy
         }
 
     @abstractmethod
@@ -166,8 +166,6 @@ class CalculationAction(Action, metaclass=ABCMeta):
         try:
             calc = run_once(calc, **self._get_run_arguments(**kwargs))
         except Exception as e:
-            print(calc)
-            print(calc.name)
             raise e
         if calc.status != Status.Ready:
             raise RuntimeError('Failed to execute calculation: {}'.format(calc.status))
@@ -196,6 +194,7 @@ class MMCalculation(CalculationAction, metaclass=ABCMeta):
         # Make a copy because we want to modify it
         args = self.input.args.copy()
         args['run'] = self.make_commands(**kwargs)
+        args['potential'] = self.input.potential
         return args
 
     @abstractmethod
