@@ -101,7 +101,7 @@ class CheckForce(Action):
             import sys
             old_max_force = sys.float_info.max
         self._max_force = amax(norm(forces, axis=1))
-        print("\tMax force", self._max_force)
+        print('\tMax force{}'.format(' diff' if fdiff else ''), self._max_force)
         if not fdiff:
             if self._max_force > ftol:
                 self._state = ActionState.No
@@ -221,10 +221,10 @@ class GradientDescent(Action):
     """
     Simple gradient descent update for positions in `flex_output` and structure.
 
-    Attributes:
+    Input attributes:
         gamma0 (float): Initial step size as a multiple of the force. (Default is 0.1.)
         fix_com (bool): Whether the center of mass motion should be subtracted off of the position update. (Default is
-            False)
+            True)
         use_adagrad (bool): Whether to have the step size decay according to adagrad. (Default is True)
 
     TODO:
@@ -233,19 +233,32 @@ class GradientDescent(Action):
 
     def __init__(self, name):
         super(GradientDescent, self).__init__(name)
-        self._accumulated_force = 0
         self.input.default.gamma0 = 0.1
-        self.input.default.fix_com = False
+        self.input.default.fix_com = True
         self.input.default.use_adagrad = True
+        self._accumulated_force = 0
 
-    def apply(self, positions, forces, masses=None, gamma0=None, fix_com=None, use_adagrad=None):
-        gamma = gamma0
+    def apply(self, positions, forces, gamma0, use_adagrad, fix_com, mask=None, masses=None):
+        if mask is not None:
+            masked = True
+            mask = array(mask)
+            # Preserve data
+            unmasked_positions = positions.copy()
+
+            # Mask input data
+            positions = positions[mask]
+            forces = forces[mask]
+            masses = masses[mask]
+        else:
+            masked = False
+        if masses is not None:
+            masses = array(masses)
 
         if use_adagrad:
             self._accumulated_force += asqrt(asum(forces * forces))
-            gamma /= self._accumulated_force
+            gamma0 /= self._accumulated_force
 
-        pos_change = gamma * forces
+        pos_change = gamma0 * forces
 
         if fix_com:
             masses = masses[:, newaxis]
@@ -253,12 +266,19 @@ class GradientDescent(Action):
             com_change = asum(pos_change * masses, axis=0) / total_mass
             pos_change -= com_change
         # TODO: fix angular momentum
+
         new_pos = positions + pos_change
+        displacements = pos_change
+        if masked:
+            unmasked_positions[mask] = new_pos
+            new_pos = unmasked_positions
+            displacements[~mask] = 0.0
 
         return {
             'positions': new_pos,
-            'displacements': pos_change
+            'displacements': displacements
         }
+
 
 
 class ApplyPositions(Action):
@@ -285,6 +305,7 @@ class ApplyPositions(Action):
         assert isinstance(structure, Structure)
         if copy:
             structure = structure.copy()
+        old_structure = structure.copy()
 
         # Find sites which match the
         if groups is not None:
@@ -298,12 +319,12 @@ class ApplyPositions(Action):
         if len(sites) != len(positions):
             raise ValueError('List sizes of positions do not match')
         if displacements:
-            print('\tMax displacements:',amax(norm(positions, axis=1)))
-            #print(positions, Structure.from_sites(sites))
+            pass
+            #print('\tMax displacements:',amax(norm(positions, axis=1)))
         for site, position in zip(sites, positions):
             if displacements:
                 site.coords += position
             else:
                 site.coords = position
-
+        #print('DISPLACEMENTS', self.name, structure.formula, norm(structure.cart_coords-old_structure.cart_coords, axis=1))
         return structure

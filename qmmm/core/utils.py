@@ -1,6 +1,7 @@
 from functools import wraps
-from os.path import exists
-from os import mkdir, environ as ENVIRONMENT, getcwd
+from os.path import exists, join
+from os import mkdir, environ as ENVIRONMENT, getcwd, chdir, getcwd
+from shutil import rmtree
 from time import sleep
 from io import StringIO
 from threading import Thread
@@ -9,6 +10,7 @@ from pymatgen import Structure, Lattice
 from itertools import groupby
 from operator import itemgetter
 from pymatgen import Structure
+from uuid import uuid4
 import logging
 import hashlib
 import numpy as np
@@ -19,6 +21,28 @@ __ENCODER__ = MontyDecoder()
 RESOURCE_DIRECTORY = 'resources'
 LAMMPS_DIRECTORY = 'lammps'
 VASP_DIRECTORY = 'vasp'
+
+
+class working_directory(object):
+
+    def __init__(self, name=None, prefix=None, delete=False):
+        self._name = str(uuid4()) if not name else name
+        self._delete = delete
+        self._curr_dir = getcwd()
+        if prefix:
+            self._name = join(prefix, self._name)
+
+    def __enter__(self):
+        if not exists(self._name):
+            mkdir(self._name)
+        chdir(self._name)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        chdir(self._curr_dir)
+        if self._delete:
+            rmtree(self._name)
+
+
 
 
 def predicate_generator(test):

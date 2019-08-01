@@ -3,7 +3,8 @@ from qmmm.core.actions.templates import LAMMPSRelaxation, LAMMPSStatic, VASPStat
 from qmmm.core.actions.workflow import Workflow
 from qmmm.core.utils import flatten, is_iterable
 from qmmm.core.actions.utils import Pointer as pointer
-from numpy import inf, ones, setdiff1d, array, concatenate, unique, amax, amin, vstack, mean, arange, dot, prod, abs as np_abs, any as np_any, identity, ptp
+from numpy import inf, ones, setdiff1d, array, concatenate, unique, amax, amin, vstack, mean, arange, dot, prod, \
+    abs as np_abs, any as np_any, identity, ptp, zeros
 from numpy.linalg import inv, norm
 from qmmm.structure_utils import wrap_positions, build_neighbor_list, indices
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -27,21 +28,23 @@ class QMMMCalculation(Workflow):
     def define_workflow(self):
         self.mm_relaxation_total = LAMMPSRelaxation('mm_relaxation_initial')
         self.check_steps = CheckStep('check_steps')
-        self.check_forces = CheckForce('check_forces')
+        self.qm_check_forces = CheckForce('qm_check_forces')
+        self.mm_check_forces = CheckForce('mm_check_forces')
         self.mm_relaxation_two = LAMMPSRelaxation('mm_relaxation_two')
         self.mm_static = LAMMPSStatic('mm_static')
-        self.qm_static = LAMMPSStatic('qm_static')
-        self.qm_gradient_descent = GradientDescent('qm_gradient_descent')
-        self.qm_apply_positions = ApplyPositions('qm_apply_positions')
+        self.qm_relaxation_one = LAMMPSRelaxation('qm_relaxation')
+#        self.qm_gradient_descent = GradientDescent('qm_gradient_descent')
+        self.qm_apply_core = ApplyPositions('qm_apply_core')
+        self.qm_apply_buffer = ApplyPositions('mm_apply_buffer')
 
-        self.edge(self.check_steps, self.check_forces, vertex_state=ActionState.No)
-        self.edge(self.check_forces, self.mm_relaxation_two, vertex_state=ActionState.No)
-        self.edge(self.mm_relaxation_two, self.qm_static)
-        self.edge(self.qm_static, self.qm_gradient_descent)
-        self.edge(self.qm_gradient_descent, self.qm_apply_positions)
-        self.edge(self.qm_apply_positions, self.check_steps)
-        self.edge(self.check_steps, self.mm_static, vertex_state=ActionState.Yes)
-        self.edge(self.check_forces, self.mm_static, vertex_state=ActionState.Yes)
+        self.edge(self.check_steps, self.mm_check_forces, vertex_state=ActionState.No)
+        self.edge(self.mm_check_forces, self.mm_relaxation_two, vertex_state=ActionState.No)
+        self.edge(self.mm_relaxation_two, self.qm_apply_buffer)
+        self.edge(self.qm_apply_buffer, self.qm_relaxation_one)
+        self.edge(self.qm_relaxation_one, self.qm_apply_core)
+        self.edge(self.qm_apply_core, self.check_steps)
+        self.edge(self.mm_check_forces, self.mm_static, vertex_state=ActionState.Yes)
+        #self.edge(self.check_forces, self.mm_static, vertex_state=ActionState.Yes)
 
 
     def define_dataflow(self):
@@ -53,74 +56,102 @@ class QMMMCalculation(Workflow):
         self.mm_relaxation_two.input.potential = pointer(self.input).potential
         self.mm_relaxation_two.input.args = pointer(self.input).lammps
         self.mm_relaxation_two.setup.prefix = self._name + '-mm-two'
+        self.mm_relaxation_two.history = 2
 
         self.mm_static.input.potential = pointer(self.input).potential
         self.mm_static.input.args = pointer(self.input).lammps
         self.mm_static.setup.prefix = self._name+'-mm-one'
 
-        self.qm_static.input.args = pointer(self.input).lammps
-        self.qm_static.input.potential = pointer(self.input).potential
+        self.qm_relaxation_one.input.args = pointer(self.input).lammps
+        self.qm_relaxation_one.input.potential = pointer(self.input).potential
         #self.qm_static.input.incar = pointer(self.input).incar
         #self.qm_static.input.kpoints = pointer(self.input).kpoints
-        self.qm_static.setup.prefix = self._name+'-qm-one'
+        self.qm_relaxation_one.setup.prefix = self._name+'-qm-one'
+        self.qm_relaxation_one.history = 2
 
         self.mm_relaxation_total.input.structure = pointer(self.input).structure
         self.mm_relaxation_total.input.output_key = ['structure']
 
         self.mm_relaxation_two.input.default.structure = pointer(self).input.mm_relaxed_structure
-        self.mm_relaxation_two.input.structure = pointer(self.qm_apply_positions).output.structure[-1][0]
+        self.mm_relaxation_two.input.structure = pointer(self.qm_apply_core).output.structure[-1][0]
         self.mm_relaxation_two.input.step = pointer(self.check_steps).output.step[-1]
+        self.mm_relaxation_two.input.default.step = 0
         self.mm_relaxation_two.input.fix_group = ['core', 'seed']
         self.mm_relaxation_two.input.output_keys = ['structure', 'forces', 'potential_energy']
         self.mm_relaxation_two.input.relax_box = False
 
+        # Update buffer positions in the qm structure
+        self.qm_apply_buffer.input.displacements = True
+        self.qm_apply_buffer.input.copy = False
+        self.qm_apply_buffer.input.structure = [
+            pointer(self.input).qm_structure,
+            pointer(self.input).qm_structure_mm,
+        ]
+        self.qm_apply_buffer.input.positions = pointer(self)._buffer_displacements
+        self.qm_apply_buffer.input.groups = ['buffer']
 
-        #self.partitioning.input.structure = self.mm_relaxation_two.output.structure[-1]
+        # Do static QM calculation
+        # Take that one which has really all species
+        self.qm_relaxation_one.input.structure = pointer(self.input).qm_structure
+        self.qm_relaxation_one.input.step = pointer(self.check_steps).output.step[-1]
+        self.qm_relaxation_one.input.default.step = 0
+        self.qm_relaxation_one.input.output_keys = ['structure', 'forces', 'potential_energy', 'masses']
+        self.qm_relaxation_one.input.relax_box = False
+        self.qm_relaxation_one.input.fix_group = ['filler']
+        # We just need the forces of the core and seed regions
+        self.qm_relaxation_one.input.groups = ['seed', 'core']
 
-        #self.mm_static.input.structure = pointer(self.qm_static).output.structure[-1]
-        self.mm_static.input.structure = pointer(self.qm_apply_positions).output.structure[-1][3]
-        self.mm_static.input.step = pointer(self.check_steps).output.step[-1]
+
+        self.mm_check_forces.input.default.forces = inf * ones((3, 3))
+        self.mm_check_forces.input.forces = pointer(self.mm_relaxation_two).output.forces[-1][pointer(self)._mm_buffer_only]
+        self.mm_check_forces.input.fdiff = pointer(self.input).fdiff
+        self.mm_check_forces.input.ftol = pointer(self.input).ftol
+
+        # We did gradient descent update the forces core region everywhere
+        # Update the core in the MM superstructure [0], the QM region [1], the QM region calculated with MM [2] for
+        # later use
+        self.qm_apply_core.input.displacements = True
+        self.qm_apply_core.input.copy = False
+        self.qm_apply_core.input.structure = [pointer(self.mm_relaxation_two).output.structure[-1],
+                                              pointer(self.input).qm_structure,
+                                              pointer(self.input).qm_structure_mm]
+        self.qm_apply_core.input.positions = pointer(self)._core_displacements
+        self.qm_apply_core.input.groups = ['core', 'seed']
+
+
+        self.mm_static.input.structure = pointer(self.input).qm_structure_mm
         self.mm_static.input.output_keys = ['structure', 'potential_energy']
-
-        self.qm_static.input.structure = pointer(self.qm_apply_positions).output.structure[-1][1]
-        self.qm_static.input.default.structure = pointer(self.input).qm_structure
-        self.qm_static.input.step = pointer(self.check_steps).output.step[-1]
-        self.qm_static.input.output_keys = ['structure', 'forces', 'potential_energy']
-        #self.qm_static.input.groups = ['seed', 'core']
-
-        self.qm_gradient_descent.input.forces = pointer(self.qm_static).output.forces[-1]
-        self.qm_gradient_descent.input.default.positions = pointer(self.input).qm_structure.cart_coords
-        self.qm_gradient_descent.input.positions = pointer(self.qm_gradient_descent).output.positions[-1]
-        self.qm_gradient_descent.input.gamma0 = 0.1
-        self.qm_gradient_descent.input.use_adagrad = False
-
-        self.qm_apply_positions.input.displacements = True
-        self.qm_apply_positions.input.copy = True
-        self.qm_apply_positions.input.structure = [pointer(self.mm_relaxation_two).output.structure[-1],
-                                                   pointer(self.qm_static).output.structure[-1],
-                                                   pointer(self.input).qm_structure,
-                                                   pointer(self.input).qm_structure_mm]
-        self.qm_apply_positions.input.positions = pointer(self.qm_gradient_descent).output.displacements[-1][pointer(self)._qm_core_only]
-        self.qm_apply_positions.input.groups = ['core', 'seed']
-
-        self.check_forces.input.default.forces = inf * ones((3,3))
-        self.check_forces.input.forces = pointer(self.qm_static).output.forces[-1][pointer(self)._qm_core_only]
-        self.check_forces.input.fdiff = pointer(self.input).fdiff
-        self.check_forces.input.ftol = pointer(self.input).ftol
 
         self.check_steps.input.max_step = 15
 
-        self.active_vertex = self.check_steps
-
         self.output.energy_mm = pointer(self.mm_relaxation_two).output.potential_energy[-1]
-        self.output.energy_qm = pointer(self.qm_static).output.potential_energy[-1]
+        self.output.energy_qm = pointer(self.qm_relaxation_one).output.potential_energy[-1]
         self.output.energy_mm_one = pointer(self.mm_static).output.potential_energy[-1]
-        self.output.qm_structure = pointer(self.qm_apply_positions).output.structure[-1][2]
+        self.output.qm_structure = pointer(self.input).qm_structure
 
+        self.active_vertex = self.mm_relaxation_two
 
     def _qm_core_only(self):
-        return indices(self.qm_static.output.structure[-1], group=['core', 'seed'])
+        return indices(self.qm_relaxation_one.output.structure[-1], group=['core', 'seed'])
 
+    def _buffer_displacements(self):
+        buffer_indices = indices(self.mm_relaxation_two.output.structure[-1], group=['buffer'])
+        try:
+            displacements = self.mm_relaxation_two.output.structure[-1].cart_coords[buffer_indices] - self.mm_relaxation_two.output.structure[-2].cart_coords[buffer_indices]
+        except IndexError:
+            displacements = zeros((len(buffer_indices), 3))
+        return displacements
+
+    def _core_displacements(self):
+        core_indices = indices(self.qm_relaxation_one.output.structure[-1], group=['core', 'seed'])
+        try:
+            displacements = self.qm_relaxation_one.output.structure[-1].cart_coords[core_indices] - self.qm_relaxation_one.output.structure[-2].cart_coords[core_indices]
+        except IndexError:
+            displacements = zeros((len(core_indices), 3))
+        return displacements
+
+    def _mm_buffer_only(self):
+        return indices(self.mm_relaxation_two.output.structure[-1], group=['buffer'])
 
     def run(self):
         self._execute_vertex(self.mm_relaxation_total, [])
@@ -255,7 +286,6 @@ class QMMMCalculation(Workflow):
         # Pop seed ids
         indices.pop(0)
         return indices
-
 
     @staticmethod
     def _get_bounding_box(structure):

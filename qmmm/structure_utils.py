@@ -1,12 +1,51 @@
 from math import cos, pi, radians, sin
 from pymatgen import Structure, Lattice
 from ase.utils.geometry import wrap_positions as ase_wrap_positions
-from ase.data import atomic_numbers, covalent_radii
+from ase.data import covalent_radii
 from pymatgen.io.ase import AseAtomsAdaptor
 from ase.neighborlist import NeighborList
 from qmmm.core.utils import ensure_iterable
+from ase import Atoms
 import numpy as np
 
+
+def pymatgen_to_ase(structure):
+    return AseAtomsAdaptor.get_atoms(structure)
+
+def ase_to_pymatgen(atoms):
+    return AseAtomsAdaptor.get_structure(atoms)
+
+def view(structure, spacefill=True, show_cell=True, camera='perspective', particle_size=0.5, background='white', color_scheme='element', show_axes=True):
+    try:
+        import nglview
+    except ImportError:
+        raise ImportError('nglview is needed')
+    if isinstance(structure, Atoms):
+        atoms = structure
+    elif isinstance(structure, Structure):
+        atoms = pymatgen_to_ase(structure)
+    else:
+        raise TypeError
+    view_  = nglview.show_ase(atoms)
+    if spacefill:
+        view_.add_spacefill(radius_type='vdw', color_scheme=color_scheme, radius=particle_size)
+        # view.add_spacefill(radius=1.0)
+        view_.remove_ball_and_stick()
+    else:
+        view_.add_ball_and_stick()
+    if show_cell:
+        if atoms.cell is not None:
+            view_.add_unitcell()
+    if show_axes:
+        view_.shape.add_arrow([-2, -2, -2], [2, -2, -2], [1, 0, 0], 0.5)
+        view_.shape.add_arrow([-2, -2, -2], [-2, 2, -2], [0, 1, 0], 0.5)
+        view_.shape.add_arrow([-2, -2, -2], [-2, -2, 2], [0, 0, 1], 0.5)
+    if camera != 'perspective' and camera != 'orthographic':
+        print('Only perspective or orthographic is permitted')
+        return None
+    view_.camera = camera
+    view_.background = background
+    return view_
 
 def ids(structure, sites):
     return [structure.index(site) for site in sites]
@@ -15,7 +54,6 @@ def orthogonalize_hexagonal(structure, atol=0.1):
     structure = structure.copy()
     hexagonal_lattice = structure.lattice
     structure.make_supercell([2, 2, 1])
-    print(hexagonal_lattice.b * 2.0 * sin(radians(hexagonal_lattice.gamma)), hexagonal_lattice.gamma, hexagonal_lattice.b, sin(radians(hexagonal_lattice.gamma)))
     orthogonal_lattice = Lattice.from_parameters(
         hexagonal_lattice.a,
         hexagonal_lattice.b * 2.0 * sin(radians(hexagonal_lattice.gamma)),
