@@ -204,6 +204,7 @@ class RemoteRunnerMixin(LoggerMixin):
                 if not cmd in processed and not echo_cmd in processed:
                     if propagate_stdout:
                         self._shell_processed_stdout.write(processed)
+                        self._shell_processed_stdout.flush()
                     shout.append(processed)
 
         # first and last lines of shout/sherr contain a prompt
@@ -424,12 +425,14 @@ class RunnerMixin(LoggerMixin):
                     shout.append(line)
                     if propagate_stdout:
                         self._shell_output.write(line)
+                        self._shell_stdout.flush()
                 else:
                     break
             else:
                 shout.append(line)
                 if propagate_stdout:
                     self._shell_output.write(line)
+                    self._shell_stdout.flush()
 
         return exit_status == 0 if not return_stdout else (exit_status, shout)
 
@@ -437,14 +440,15 @@ class RunnerMixin(LoggerMixin):
         f = self._shell_output
         line = f.readline()
         log_file.write(line)
-        self.logger.debug(line, end='')
+        self.logger.debug(line)
         while CALCULATION_END_MARK not in line.strip():
             line = f.readline()
             if line:
                 log_file.write(line)
-                self.logger.debug(line, end='')
+                self.logger.debug(line)
         # If everything worked old_line should contain the exit status
         line, exitcode = line.strip().split(' ')
+        log_file.flush()
         try:
             exitcode = int(exitcode)
         except ValueError:

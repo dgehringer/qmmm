@@ -538,6 +538,7 @@ class LAMMPSCalculation(Calculation):
         with open(self.get_path(self._input_file), 'w') as input_file:
             for command in self._sequence:
                 if isinstance(command, PairCoeff):
+                    old_coeff = command.coeff
                     # Get all parts which do not contain species
                     #
                     is_element = predicate_generator(element_test)
@@ -549,7 +550,7 @@ class LAMMPSCalculation(Calculation):
                         self.logger.info('Adapting potential command. The potential supports {} but is/are {} is needed'.format(elements, species_order))
                         while len(mask) > len(species_order)+1:
                             mask.pop(mask.index(True))
-                        print(mask)
+
                         old_cmd = str(command).rstrip()
                         command.coeff = [c if not m else species_order_.pop(0) for c, m in zip(command.coeff, mask)]
                         self.logger.info('Adapted "pair_coeff" command from "{}" to "{}"'.format(old_cmd, str(command).rstrip()))
@@ -562,7 +563,9 @@ class LAMMPSCalculation(Calculation):
                             self.logger.info('Potential is OK!')
                     else:
                         raise RuntimeError('An error ocurred while adapting the potential command')
-
+                    input_file.write(str(command))
+                    command.coeff = old_coeff
+                    continue # Skip write for this command
                 input_file.write(str(command))
 
         # Write potential files
@@ -628,6 +631,8 @@ class LAMMPSCalculation(Calculation):
 
         except Exception as e:
             self.logger.exception('An error occurred while processing the data', exc_info=e)
+            import os
+            os.system('kate {}'.format(self.get_path(self._log_file)))
             return False
         return True
 
@@ -683,7 +688,11 @@ class LAMMPSCalculation(Calculation):
         self._check_ready(raise_error=True)
         if 'pe' not in self._thermo_args:
             raise ValueError('potential energy was not displayed in thermo_style')
-        return self['pe'][-1]
+        pe = self['pe'][-1]
+        if is_iterable(pe) and len(pe) == 1:
+            return pe[0]
+        else:
+            return pe
 
     def get_structure(self, group='all'):
         self._check_ready(raise_error=True)

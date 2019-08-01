@@ -2,10 +2,8 @@ from qmmm.core.lammps import *
 from qmmm.core.utils import is_iterable, ensure_iterable, run_once, is_primitive
 from qmmm.core.actions.utils import LoggerMixin, IODictionary, Crumb, CombinedInput, InputDictionary
 from qmmm.core.calculation import LAMMPSCalculation, Status, VASPCalculation
-from numpy import sum as asum, array, sqrt as asqrt, newaxis, inf as ainf, zeros, amax
+from numpy import sum as asum, array, sqrt as asqrt, newaxis, inf as ainf, zeros, amax, abs as aabs
 from numpy.linalg import norm
-from monty.json import MSONable
-from os import chdir, getcwd
 from enum import Enum
 from abc import ABCMeta, abstractmethod
 from pymatgen.io.vasp import Incar, Kpoints
@@ -92,25 +90,31 @@ class CheckForce(Action):
         self._valid_states = (ActionState.Yes, ActionState.No)
         self._max_action = None
         self.input.default.ftol = 1.0
+        self.input.default.fdiff = False
+        self._state = ActionState.No
 
-    def apply(self, forces, ftol, **kwargs):
+    def apply(self, forces, ftol, fdiff=None,**kwargs):
         # Find the single biggest force
-        if isinstance(forces, CombinedInput):
-            max_action, max_forces = max([(owner, amax(norm(f, axis=1))) for owner, f in forces], key=lambda t: t[1])
-            self._max_action = max_action
-            self._max_force = max_forces
+        old_max_force = self._max_force
+        if old_max_force == ainf:
+            # Avoid inf-inf == nan
+            import sys
+            old_max_force = sys.float_info.max
+        self._max_force = amax(norm(forces, axis=1))
+        print("\tMax force", self._max_force)
+        if not fdiff:
+            if self._max_force > ftol:
+                self._state = ActionState.No
+            else:
+                self._state = ActionState.Yes
+                print('YAAAA we reached force convergence: {} > {}'.format(ftol, self._max_force))
         else:
-            self._max_force = amax(norm(forces, axis=1))
-        print("\tMax force", self._max_force, self._max_action)
-        if isinstance(forces, CombinedInput):
-            for owner, f in forces:
-                print('\t\tMax force', amax(norm(f, axis=1)), type(owner).__name__, owner.name if hasattr(owner, 'name') else '')
-        # Be true iff the biggest force is below the convergence threshold
-        if self._max_force > ftol:
-            self._state = ActionState.No
-        else:
-            self._state = ActionState.Yes
-            print('YAAHHHEEE we reached forche convergence')
+            if aabs(self._max_force - old_max_force) > ftol:
+                self._state = ActionState.No
+            else:
+                self._state = ActionState.Yes
+                print('YAAAA we reached force convergence (diff): {} > {}'.format(ftol, aabs(self._max_force - old_max_force)))
+
 
 
 class CalculationAction(Action, metaclass=ABCMeta):

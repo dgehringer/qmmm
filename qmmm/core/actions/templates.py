@@ -46,8 +46,8 @@ class LAMMPSRelaxation(MMCalculation):
     def __init__(self, name):
         super(LAMMPSRelaxation, self).__init__(name)
         self.setup.default.calculation = LAMMPSCalculation
-        self.input.default.etol = 1e-10
-        self.input.default.ftol = 1e-10
+        self.input.default.etol = 1e-6
+        self.input.default.ftol = 1e-6
         self.input.default.maxiter = 1000000
         self.input.default.maxeval = 1000000
         self.input.default.vmax = 0.01
@@ -61,7 +61,8 @@ class LAMMPSRelaxation(MMCalculation):
             Minimize(etol, ftol, maxiter, maxeval)
         ]
         if relax_box is not None:
-            command_list.insert(1, Fix('relaxation', 'all', Fix.BoxRelax, aniso=0.0, vmax=vmax))
+            if relax_box:
+                command_list.insert(1, Fix('relaxation', 'all', Fix.BoxRelax, aniso=0.0, vmax=vmax))
         if fix_group is not None:
             for group in ensure_iterable(fix_group):
                 fix_name = 'fix_{}'.format(group)
