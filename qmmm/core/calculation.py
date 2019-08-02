@@ -738,11 +738,22 @@ class LAMMPSCalculation(Calculation):
             raise TypeError('Dump argument must be a Dump object or dump_id string')
         return self.get_dumps(group=group)[dump]
 
+    def as_dict(self):
+        d = super(LAMMPSCalculation, self).as_dict()
+        d['runner'] = self._runner.as_dict()
+        return d
+
+    @classmethod
+    def from_dict(cls, d):
+        obj = super().from_dict(d)
+        obj._runner = LAMMPSRunner.from_dict(d['runner'])
+        return obj
+
 
 class VASPCalculation(Calculation):
     XC_FUNCS = ['lda', 'pbe']
 
-    def __init__(self, structure, name, working_directory=None, xc_func='pbe'):
+    def __init__(self, structure, name, working_directory=None):
         if not working_directory:
             working_directory = '{}.vasp'.format(name)
         super(VASPCalculation, self).__init__(structure, name=name, working_directory=working_directory)
@@ -771,22 +782,15 @@ class VASPCalculation(Calculation):
 
     def as_dict(self):
         d = super(VASPCalculation, self).as_dict()
-        d['incar'] = self.incar.as_dict()
-        d['kpoints'] = self.kpoints.as_dict()
         d['xc_func'] = self._xc_func
         d['runner'] = self._runner.as_dict()
         return d
 
     @classmethod
     def from_dict(cls, d):
-        if 'structure' in d:
-            d['structure'] = StructureWrapper.from_dict(d['structure'])
-        decoded = {k: process_decoded(v) for k, v in d.items()
-                   if not k.startswith("@")}
-        obj = cls(decoded['structure'], decoded['name'], decoded['incar'], decoded['kpoints'],
-                  working_directory=decoded['working_directory'], xc_func=decoded['xc_func'])
-        Calculation._set_internal(obj, decoded)
-        obj._runner = decoded['runner']
+        obj = super().from_dict(d)
+        obj._runner = VASPRunner.from_dict(d['runner'])
+        obj._xc_func = d['xc_func']
         return obj
 
     @property

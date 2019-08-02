@@ -50,6 +50,8 @@ def get_connection(user, host, config, logger):
             ssh_client.connect(hostname=host, port=port, username=user, pkey=pkey)
             sftp_client = ssh_client.open_sftp()
             shell_channel = ssh_client.invoke_shell()
+            # Prevent it from beeing garbage collected
+            shell_channel.keep_this = ssh_client
             shell_stdin = shell_channel.makefile('wb')
             shell_stdout = shell_channel.makefile('r')
         except SSHException:

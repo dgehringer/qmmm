@@ -23,6 +23,31 @@ LAMMPS_DIRECTORY = 'lammps'
 VASP_DIRECTORY = 'vasp'
 
 
+def run_once(calculation, **kwargs):
+    id_file_name = '{}.id'.format(calculation.name)
+    if not exists(id_file_name):
+
+        # The file does not exist so we definitely have to run the calculation
+        with open(id_file_name, 'w') as id_file_handle:
+            id_file_handle.write(calculation.id)
+
+            calculation.run(**kwargs)
+
+        calculation.save()
+        return calculation
+    else:
+        cls = calculation.__class__
+        # Load the id from the file and load the calculation from the pickle file afterwards
+        with open(id_file_name, 'r') as id_file_handle:
+            calculation_id = id_file_handle.read()
+        calc = cls.load(calculation_id)
+        from qmmm.core.calculation import Status
+        if calc.status == Status.Execution:
+            calc.run()
+            calc.save()
+        return calc
+
+
 class working_directory(object):
 
     def __init__(self, name=None, prefix=None, delete=False):
@@ -41,8 +66,6 @@ class working_directory(object):
         chdir(self._curr_dir)
         if self._delete:
             rmtree(self._name)
-
-
 
 
 def predicate_generator(test):
@@ -80,25 +103,6 @@ def is_primitive(thing):
     int, float, bool, str, complex, np.bool_, np.int_, np.str_, np.float_, np.complex_, np.ndarray, np.int8, np.int16,
     np.int32, np.int64, np.float16, np.float32, np.float64)
     return isinstance(thing, primitives) or thing is None
-
-
-def run_once(calculation, **kwargs):
-    id_file_name = '{}.id'.format(calculation.name)
-    if not exists(id_file_name):
-        with open(id_file_name, 'w') as id_file_handle:
-            id_file_handle.write(calculation.id)
-        # The file does not exist so we definitely have to run the calculation
-        calculation.run(**kwargs)
-        calculation.save()
-        return calculation
-    else:
-        cls = calculation.__class__
-        # Load the id from the file and load the calculation from the pickle file afterwards
-        with open(id_file_name, 'r') as id_file_handle:
-            calculation_id = id_file_handle.read()
-        calc = cls.load(calculation_id)
-        return calc
-
 
 
 def get_configuration_directory():
