@@ -45,6 +45,7 @@ class Status(Enum):
     Ready = 10
 
 
+
 class Calculation(MSONable, LoggerMixin, metaclass=ABCMeta):
 
     def __init__(self, structure, name=None, working_directory=None):
@@ -99,6 +100,10 @@ class Calculation(MSONable, LoggerMixin, metaclass=ABCMeta):
 
     @abstractmethod
     def execute(self, *args, **kwargs):
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset(self, *args, **kwargs):
         raise NotImplementedError
 
     @abstractmethod
@@ -252,7 +257,8 @@ class Calculation(MSONable, LoggerMixin, metaclass=ABCMeta):
 
                     result = calc.process(*calc._run_args, **calc._run_kwargs)
                     if not result:
-                        raise RuntimeError('Failed to parse outputs in directory: {}'.format(calc.working_directory))
+                        from logging import getLogger
+                        getLogger('{}.{}'.format(cls.__module__, cls.__name__)).warning('Failed to parse outputs in directory: {}'.format(calc.working_directory))
                     if alter_wd:
                         calc._working_directory = old_wd
 
@@ -631,8 +637,6 @@ class LAMMPSCalculation(Calculation):
 
         except Exception as e:
             self.logger.exception('An error occurred while processing the data', exc_info=e)
-            import os
-            os.system('kate {}'.format(self.get_path(self._log_file)))
             return False
         return True
 
@@ -749,6 +753,12 @@ class LAMMPSCalculation(Calculation):
         obj._runner = LAMMPSRunner.from_dict(d['runner'])
         return obj
 
+    def reset(self, *args, **kwargs):
+        self._status = Status.NotInitialized
+        if self._runner_bound:
+            self._runner.unbind()
+            self._runner_bound = False
+        self._runner = LAMMPSRunner()
 
 class VASPCalculation(Calculation):
     XC_FUNCS = ['lda', 'pbe']
@@ -867,6 +877,13 @@ class VASPCalculation(Calculation):
 
         self._potcar = potcar
 
+    def reset(self, *args, **kwargs):
+        self._status = Status.NotInitialized
+        if self._runner_bound:
+            self._runner.unbind()
+            self._runner_bound = False
+        self._runner = VASPRunner()
+
     def process(self, *args, **kwargs):
         # Try to parse all output files
         try:
@@ -881,6 +898,7 @@ class VASPCalculation(Calculation):
                 self._final_structure.add_site_property(property_name, values)
             self._final_energy = float(self._oszicar.final_energy)
         except Exception as e:
+            self.logger.exception('Failed to parse VASP output for calculation {}:{}!'.format(self.name, self.id), exc_info=e)
             return False
         else:
             return True

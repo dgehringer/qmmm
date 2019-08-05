@@ -12,7 +12,10 @@ from tempfile import NamedTemporaryFile
 from shutil import copyfileobj
 from stat import S_ISDIR
 from .configuration import Configuration
-from os import mkdir
+from os import mkdir, stat
+from logging import getLogger
+from atexit import register
+from datetime import datetime
 
 GLOBAL_CONNECTIONS = {
 
@@ -36,6 +39,19 @@ def close_connection(user, host, logger):
             ssh_client.close()
             logger.info('Closed SSH connection: "{}@{}!"'.format(user, host))
         del GLOBAL_CONNECTIONS[((user, host))]
+
+
+def close_all_conection_on_system_exit():
+    global GLOBAL_CONNECTIONS
+    module_logger = getLogger(__file__)
+    module_logger.info('Closing all connections because of system exit ...')
+    connection_keys = list(GLOBAL_CONNECTIONS.keys())
+    for connection in connection_keys:
+        user, host = connection
+        close_connection(user, host, module_logger)
+
+# Register close_all_conection_on_system_exit()
+register(close_all_conection_on_system_exit)
 
 def get_connection(user, host, config, logger):
     global GLOBAL_CONNECTIONS
@@ -102,6 +118,7 @@ class RemoteRunnerMixin(LoggerMixin):
         self._port = remote['port']
         self._remote_prefix = remote['prefix']
         self._remote_working_directory = join(self._remote_prefix, self._remote_working_directory_name)
+
 
         ssh_client, sftp_client, shell_channel, shell_stdin, shell_stdout = get_connection(self._user, self._host, remote, self.logger)
         self._ssh_client = ssh_client
@@ -258,6 +275,16 @@ class RemoteRunnerMixin(LoggerMixin):
                 #Find all files which are on the remote server only
                 remote_exclusive = [rf for rf in remote_files if rf not in common_files]
 
+                for common_file in common_files:
+                    local_last_modified = stat(join(root, common_file)).st_mtime
+                    local_last_modified = datetime.fromtimestamp(local_last_modified)
+                    remote_last_modified = self._sftp_client.lstat(join(remote_root, common_file)).st_mtime
+                    remote_last_modified = datetime.fromtimestamp(remote_last_modified)
+                    if not local_last_modified > remote_last_modified:
+                        # Found newer versions of some files on the server
+                        remote_exclusive.append(common_file)
+                        self.logger.warning('Found a newer version of file "{}" on the remote location'.format(common_file))
+
                 # Transfer local files
                 if len(local_exclusive) != 0:
 
@@ -306,7 +333,10 @@ class RemoteRunnerMixin(LoggerMixin):
                         raise RuntimeError('Could not create remote archive: "{}"'.format(remote_download_archive_name))
 
     def _close(self):
-        close_connection(self._user, self._host, self.logger)
+        pass
+        # We do not want that the connection is closed after a run of a calculation
+        # only at system exit
+        #close_connection(self._user, self._host, self.logger)
 
     def _process_arguments(self, remote_kwargs):
         processed_args = {}

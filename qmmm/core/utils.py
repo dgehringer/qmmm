@@ -1,6 +1,6 @@
 from functools import wraps
 from os.path import exists, join
-from os import mkdir, environ as ENVIRONMENT, getcwd, chdir, getcwd
+from os import mkdir, environ as ENVIRONMENT, getcwd, chdir, getcwd, remove
 from shutil import rmtree
 from time import sleep
 from io import StringIO
@@ -46,6 +46,68 @@ def run_once(calculation, **kwargs):
             calc.run()
             calc.save()
         return calc
+
+
+def all_ready(calcs, run=True, raise_error=False, early_exit=False):
+    from qmmm.core.calculation import Status
+    result = True
+    for i in range(len(calcs)):
+        calc = calcs[i]
+        if calc.status != Status.Ready:
+            # Could be that it is finished already
+            # Let's run it again and see if someting changed
+            if run:
+                ncalc = run_once(calc)
+                calcs[i] = ncalc
+                calc = ncalc
+            else:
+                result = False
+            # It is still not finished
+            if calc.status != Status.Ready:
+
+                if calc.status in [Status.ExecutionFailed, Status.ProcessingFailed]:
+                    # Ohhh nooo the calculation crahsed
+                    if raise_error:
+                        raise RuntimeError('Calculation "{}" crashed! Please have a look at the log files'.format(calc.name))
+                # Nevertheless not all are finished
+                result = False
+                # But we do not want to break the loop because we want to check all of the again
+                # But if we are told to do so we exit the loop => undefined behaviour
+                if early_exit:
+                    return result
+    return result
+
+
+def crashed(calcs):
+    from qmmm.core.calculation import Status
+    return [
+        c for c in calcs if c.status in [Status.ExecutionFailed, Status.ProcessingFailed]
+    ]
+
+def restart(calcs, db=False, execute=True):
+    from qmmm.core.calculation import Calculation
+    logger = logging.getLogger('utils.restart()')
+    for calculation in calcs:
+        assert isinstance(calculation, Calculation)
+        id_file_name = '{}.id'.format(calculation.name)
+        pickle_file_name = '{}.pickle'.format(calculation.id)
+        archive_file_name = '{}.pickle'.format(calculation.id)
+        if exists(id_file_name):
+            remove(id_file_name)
+            logger.info('Removed id file "{}" for calculation "{}"'.format(id_file_name, calculation.id))
+        if exists(archive_file_name):
+            remove(archive_file_name)
+            logger.info('Removed archive file "{}" for calculation "{}"'.format(archive_file_name, calculation.id))
+        if exists(pickle_file_name):
+            remove(pickle_file_name)
+            logger.info('Removed pickle file "{}" for calculation "{}"'.format(pickle_file_name, calculation.id))
+        if db:
+            raise NotImplementedError
+
+        logger.info('Resetting calculation "{}:{}"'.format(calculation.name, calculation.id))
+        calculation.reset()
+        if execute:
+            calculation.run()
 
 
 class working_directory(object):
