@@ -141,19 +141,25 @@ def predicate_generator(test):
             return result
     return _predicate_wrapper
 
+
 class HashableSet(set):
 
     def __hash__(self):
         return sum([hash(item) for item in self])
 
+
 class LoggerMixin(object):
     @property
     def logger(self):
+        return logging.getLogger(self.fullname())
+
+    @classmethod
+    def fullname(cls):
         name = '.'.join([
-            self.__module__,
-            self.__class__.__name__
+            cls.__module__,
+            cls.__name__
         ])
-        return logging.getLogger(name)
+        return name
 
 def ensure_iterable(object):
     return [object] if not is_iterable(object) else object

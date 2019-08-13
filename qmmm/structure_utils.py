@@ -116,14 +116,22 @@ def build_shell(structure, seed_sites, distance, include_index=True):
     return [(k, v) for k, v in shell_sites.items()] if include_index else list(shell_sites.values())
 
 
-def wrap_positions(structure, center=(0.5, 0.5, 0.5), pbc=None, eps=1e-7):
-
+def wrap_positions(structure, center=(0.5, 0.5, 0.5), pbc=None, eps=1e-7, pretty_translation=True):
     atoms = AseAtomsAdaptor.get_atoms(structure) if isinstance(structure, Structure) else structure
     if pbc is None:
         pbc = atoms.pbc
     positions = ase_wrap_positions(atoms.positions, atoms.cell,
-                                    pbc, center, eps)
+                                    pbc=pbc, center=center, eps=eps, pretty_translation=pretty_translation)
     return positions
+
+
+def wrap_structure(structure, center=(0.5, 0.5, 0.5), pbc=None, eps=1e-7):
+    atoms = AseAtomsAdaptor.get_atoms(structure) if isinstance(structure, Structure) else structure
+    if pbc is None:
+        pbc = atoms.pbc
+    atoms.positions = ase_wrap_positions(atoms.positions, atoms.cell,
+                                    pbc, center, eps)
+    return atoms
 
 def natural_cutoffs(atoms, mult=1, **kwargs):
     """Generate a radial cutoff for every atom based on covalent radii.

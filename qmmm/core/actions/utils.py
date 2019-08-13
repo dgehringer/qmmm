@@ -339,7 +339,7 @@ class InputDictionary(IODictionary):
         try:
             return super(InputDictionary, self).__getitem__(item)
         except KeyError:
-            self.logger.warning('Falling back to default values for key "{}"'.format(item))
+            self.logger.info('Falling back to default values for key "{}"'.format(item))
             return self.default.__getitem__(item)
 
     def __getattr__(self, item):

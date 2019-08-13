@@ -6,11 +6,8 @@ from numpy import sum as asum, array, sqrt as asqrt, newaxis, inf as ainf, zeros
 from numpy.linalg import norm
 from enum import Enum
 from abc import ABCMeta, abstractmethod
-from pymatgen.io.vasp import Incar, Kpoints
 from pymatgen import Structure
-from main import vesta
-from pprint import pprint
-
+from logging import ERROR, INFO, DEBUG
 
 class ActionState(Enum):
     Default = 0
@@ -23,6 +20,7 @@ class Action(LoggerMixin, metaclass=ABCMeta):
     def __init__(self, name):
         self.input = InputDictionary()
         self.output = IODictionary()
+        self._log_level = ERROR
         self._state = ActionState.Default
         self._valid_states = (ActionState.Default,)
         self._name = name
@@ -53,6 +51,19 @@ class Action(LoggerMixin, metaclass=ABCMeta):
     def history(self, value):
         self._history = value
 
+    @property
+    def log_level(self):
+        return self._log_level
+
+    @log_level.setter
+    def log_level(self, value):
+        self._log_level = value
+
+    def log(self, message, level=INFO, exc_info=None):
+        self.logger.log(level, message, exc_info=exc_info)
+        if self.log_level <= level:
+            print('{}[{}]:{}'.format(self.fullname(),self._name, message))
+
 
 class CheckStep(Action):
 
@@ -64,6 +75,7 @@ class CheckStep(Action):
 
     def apply(self, *args, max_step=None):
         self._step += 1
+        self.log('{}/{}'.format(self._step, max_step), level=DEBUG)
         if self._step < max_step:
             self._state = ActionState.No
         else:
@@ -101,20 +113,19 @@ class CheckForce(Action):
             import sys
             old_max_force = sys.float_info.max
         self._max_force = amax(norm(forces, axis=1))
-        print('\tMax force{}'.format(' diff' if fdiff else ''), self._max_force)
+        self.log('\tMax force{}:{}'.format(' diff' if fdiff else '', self._max_force), level=DEBUG )
         if not fdiff:
             if self._max_force > ftol:
                 self._state = ActionState.No
             else:
                 self._state = ActionState.Yes
-                print('YAAAA we reached force convergence: {} > {}'.format(ftol, self._max_force))
+                self.log('YAAAA we reached force convergence: {} > {}'.format(ftol, self._max_force), level=DEBUG)
         else:
             if aabs(self._max_force - old_max_force) > ftol:
                 self._state = ActionState.No
             else:
                 self._state = ActionState.Yes
-                print('YAAAA we reached force convergence (diff): {} > {}'.format(ftol, aabs(self._max_force - old_max_force)))
-
+                self.log('YAAAA we reached force convergence (diff): {} > {}'.format(ftol, aabs(self._max_force - old_max_force)), level=DEBUG)
 
 
 class CalculationAction(Action, metaclass=ABCMeta):
@@ -216,7 +227,6 @@ class QMCalculation(CalculationAction, metaclass=ABCMeta):
         return self.input.args
 
 
-
 class GradientDescent(Action):
     """
     Simple gradient descent update for positions in `flex_output` and structure.
@@ -234,7 +244,7 @@ class GradientDescent(Action):
     def __init__(self, name):
         super(GradientDescent, self).__init__(name)
         self.input.default.gamma0 = 0.1
-        self.input.default.fix_com = True
+        self.input.default.fix_com = False
         self.input.default.use_adagrad = True
         self._accumulated_force = 0
 
@@ -248,7 +258,8 @@ class GradientDescent(Action):
             # Mask input data
             positions = positions[mask]
             forces = forces[mask]
-            masses = masses[mask]
+            if fix_com:
+                masses = masses[mask]
         else:
             masked = False
         if masses is not None:
@@ -272,11 +283,14 @@ class GradientDescent(Action):
         if masked:
             unmasked_positions[mask] = new_pos
             new_pos = unmasked_positions
-            displacements[~mask] = 0.0
+            disp = zeros(unmasked_positions.shape)
+            disp[mask] = displacements
+        else:
+            disp = displacements
 
         return {
             'positions': new_pos,
-            'displacements': displacements
+            'displacements': disp
         }
 
 
@@ -317,7 +331,8 @@ class ApplyPositions(Action):
         else:
             sites = structure.sites
         if len(sites) != len(positions):
-            raise ValueError('List sizes of positions do not match')
+            raise ValueError('List of sites "{}" of positions do not match "{}"'.format(len(sites), len(positions)))
+
         if displacements:
             pass
             #print('\tMax displacements:',amax(norm(positions, axis=1)))

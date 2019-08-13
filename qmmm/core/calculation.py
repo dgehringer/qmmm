@@ -750,6 +750,9 @@ class LAMMPSCalculation(Calculation):
     @classmethod
     def from_dict(cls, d):
         obj = super().from_dict(d)
+        # TODO: This is just a workaround for a bug which existed before
+        if 'runner' not in d:
+            d['runner'] = LAMMPSRunner().as_dict()
         obj._runner = LAMMPSRunner.from_dict(d['runner'])
         return obj
 
@@ -759,6 +762,7 @@ class LAMMPSCalculation(Calculation):
             self._runner.unbind()
             self._runner_bound = False
         self._runner = LAMMPSRunner()
+
 
 class VASPCalculation(Calculation):
     XC_FUNCS = ['lda', 'pbe']

@@ -3,7 +3,7 @@ from qmmm.core.utils import LoggerMixin, ensure_iterable
 from qmmm.core.actions.utils import IODictionary, InputDictionary
 from qmmm.core.actions.actions import Action, ActionState
 from qmmm.core.event import Event
-
+from logging import ERROR
 
 class Workflow(LoggerMixin, metaclass=ABCMeta):
 
@@ -11,16 +11,18 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
         self._name = name
         self.input = InputDictionary()
         self.output = IODictionary()
+        self.input.default.log_level = ERROR
         self._vertices = {}
         self._edges = {}
         self._active_vertex = None
         self._attribute_vertex_name_mapping = {}
-        self.define_workflow()
-        self.define_dataflow()
         self.finished = Event()
         self.started = Event()
         self.vertex_processing = Event()
         self.vertex_processed = Event()
+        self.define_defaults()
+        self.define_workflow()
+        self.define_dataflow()
 
     def __setattr__(self, key, value):
         if isinstance(value, Action):
@@ -40,6 +42,10 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
     @property
     def name(self):
         return self._name
+
+    @abstractmethod
+    def define_defaults(self):
+        raise NotImplementedError
 
     @abstractmethod
     def define_workflow(self):
@@ -65,7 +71,9 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
                 raise e
             else:
                 self.logger.info('Input hook successful')
-        output_data = vertex.apply(**input_data)
+        # Resolve it beforehand to get meaningful errors
+        data = {k: v for k, v in input_data.items()}
+        output_data = vertex.apply(**data)
 
         if output_data is not None:
             self.append_output(vertex, output_data)
@@ -76,6 +84,8 @@ class Workflow(LoggerMixin, metaclass=ABCMeta):
         self.started.fire()
         input_hooks = []
         while self.active_vertex:
+            # Set the correct log leve
+            self.active_vertex.log_level = self.input.log_level
             self.logger.info('{}.active_vertex={}'.format(self.name, self.active_vertex.name))
             self.vertex_processing.fire(self.active_vertex)
             self._execute_vertex(self.active_vertex, input_hooks)
