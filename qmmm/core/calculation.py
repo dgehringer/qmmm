@@ -264,6 +264,9 @@ class Calculation(MSONable, LoggerMixin, metaclass=ABCMeta):
 
         return calc
 
+    def __eq__(self, other):
+        return self.id == other.id if hasattr(other, 'id') else self.id == other
+
 
 DEFAULT_THERMO_ARGS = ('step', 'pe', 'lx', 'ly', 'lz', 'pxx', 'pyy', 'pzz', 'pxy', 'pyz', 'pxz', 'vol')
 
@@ -576,7 +579,7 @@ class LAMMPSCalculation(Calculation):
 
         # Write potential files
         for potential in self._potential:
-            with open(self.get_path(potential.file_name), 'wb') as potential_file:
+            with open(self.get_path(potential.file_name), 'w') as potential_file:
                 potential_file.write(potential.data)
 
     def success(self, *args, **kwargs):
@@ -834,6 +837,7 @@ class VASPCalculation(Calculation):
     def initialize(self, *args, **kwargs):
         if 'incar' in kwargs:
             incar = kwargs['incar']
+            self._incar = incar
         else:
             raise ValueError('incar argument is missing')
 
@@ -848,6 +852,7 @@ class VASPCalculation(Calculation):
 
         if 'kpoints' in kwargs:
             kpoints = kwargs['kpoints']
+            self._kpoints = kpoints
         else:
             raise ValueError('kpoints argument is missing')
 

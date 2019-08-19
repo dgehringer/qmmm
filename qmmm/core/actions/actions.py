@@ -65,6 +65,7 @@ class Action(LoggerMixin, metaclass=ABCMeta):
             print('{}[{}]:{}'.format(self.fullname(),self._name, message))
 
 
+
 class CheckStep(Action):
 
     def __init__(self, name):

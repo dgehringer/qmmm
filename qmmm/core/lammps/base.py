@@ -62,6 +62,7 @@ class EamFs(CommandStyle):
 class Meam(CommandStyle):
     Style = 'meam'
 
+
 class PairStyle(Command):
     Command = 'pair_style'
 

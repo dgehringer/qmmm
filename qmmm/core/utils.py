@@ -23,16 +23,28 @@ LAMMPS_DIRECTORY = 'lammps'
 VASP_DIRECTORY = 'vasp'
 
 
+def extract(calculations, prefix=None, db=False):
+    for calculation in calculations:
+        cls_ = type(calculation)
+        cls_.load(calculation.id, prefix=prefix, extract=True, db=db)
+
+def cleanup(calculations, only_ready=True):
+    from qmmm.core.calculation import Status
+    for calculation in calculations:
+        if calculation.status != Status.Ready:
+            if only_ready:
+                continue
+        if exists(calculation.get_path()):
+            rmtree(calculation.get_path())
+
 def run_once(calculation, **kwargs):
     id_file_name = '{}.id'.format(calculation.name)
     if not exists(id_file_name):
-
         # The file does not exist so we definitely have to run the calculation
         with open(id_file_name, 'w') as id_file_handle:
             id_file_handle.write(calculation.id)
 
-            calculation.run(**kwargs)
-
+        calculation.run(**kwargs)
         calculation.save()
         return calculation
     else:
@@ -48,20 +60,17 @@ def run_once(calculation, **kwargs):
         return calc
 
 
-def all_ready(calcs, run=True, raise_error=False, early_exit=False):
+def ready(calcs, run=True, raise_error=False):
     from qmmm.core.calculation import Status
-    result = True
-    for i in range(len(calcs)):
-        calc = calcs[i]
+    calcs = ensure_iterable(calcs)
+    result = []
+    for calc in calcs:
         if calc.status != Status.Ready:
             # Could be that it is finished already
             # Let's run it again and see if someting changed
             if run:
                 ncalc = run_once(calc)
-                calcs[i] = ncalc
                 calc = ncalc
-            else:
-                result = False
             # It is still not finished
             if calc.status != Status.Ready:
 
@@ -70,11 +79,14 @@ def all_ready(calcs, run=True, raise_error=False, early_exit=False):
                     if raise_error:
                         raise RuntimeError('Calculation "{}" crashed! Please have a look at the log files'.format(calc.name))
                 # Nevertheless not all are finished
-                result = False
-                # But we do not want to break the loop because we want to check all of the again
-                # But if we are told to do so we exit the loop => undefined behaviour
-                if early_exit:
-                    return result
+                # This calculation crashed
+                continue
+            else:
+                result.append(calc)
+
+        else:
+            # caculation is ready
+            result.append(calc)
     return result
 
 
@@ -84,7 +96,7 @@ def crashed(calcs):
         c for c in calcs if c.status in [Status.ExecutionFailed, Status.ProcessingFailed]
     ]
 
-def restart(calcs, db=False, execute=True):
+def restart(calcs, db=False, execute=True, save=True):
     from qmmm.core.calculation import Calculation
     logger = logging.getLogger('utils.restart()')
     for calculation in calcs:
@@ -108,6 +120,8 @@ def restart(calcs, db=False, execute=True):
         calculation.reset()
         if execute:
             calculation.run()
+            if save:
+                calculation.save(db=db)
 
 
 class working_directory(object):
@@ -116,6 +130,7 @@ class working_directory(object):
         self._name = str(uuid4()) if not name else name
         self._delete = delete
         self._curr_dir = getcwd()
+        self._active = False
         if prefix:
             self._name = join(prefix, self._name)
 
@@ -123,11 +138,17 @@ class working_directory(object):
         if not exists(self._name):
             mkdir(self._name)
         chdir(self._name)
+        self._active = True
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         chdir(self._curr_dir)
         if self._delete:
             rmtree(self._name)
+        self._active = False
+
+    @property
+    def active(self):
+        return self._active
 
 
 def predicate_generator(test):

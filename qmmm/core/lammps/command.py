@@ -14,6 +14,7 @@ SUBCLASS_REGISTRY = {}
 def _make_registry_key(cls):
     return '{}.{}'.format(cls.__module__, cls.__name__)
 
+
 class SubclassRegistry(ABCMeta):
 
     def __new__(mcls, name, bases, namespace, **kwargs):
@@ -32,13 +33,17 @@ class SubclassRegistry(ABCMeta):
         try:
             return super(SubclassRegistry, cls).__getattribute__(item)
         except AttributeError:
-            if hasattr(cls, 'styles'):
-                style_func = super(SubclassRegistry, cls).__getattribute__('styles')
-                for style_cls in style_func():
-                    if item == style_cls.__name__:
-                        return style_cls
-                # If we get here nothing was found raise again the Attribute error
-                raise
+            # CommandStyle Cannot have a styles function
+            if issubclass(cls, Command):
+                if hasattr(cls, 'styles'):
+                    style_func = super(SubclassRegistry, cls).__getattribute__('styles')
+                    for style_cls in style_func():
+                        if item == style_cls.__name__:
+                            return style_cls
+                    # If we get here nothing was found raise again the Attribute error
+                    raise
+                else:
+                    raise
             else:
                 raise
 

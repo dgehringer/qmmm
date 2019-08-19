@@ -125,7 +125,7 @@ class QMMMCalculation(Workflow):
         self.mm_static.input.structure = pointer(self.input).qm_structure_mm
         self.mm_static.input.output_keys = ['structure', 'potential_energy']
 
-        self.check_steps.input.max_step = self.input.max_step
+        self.check_steps.input.max_step = pointer(self.input).max_step
 
         self.output.energy_mm = pointer(self.mm_relaxation_two).output.potential_energy[-1]
         self.output.energy_qm = pointer(self.qm_relaxation_one).output.potential_energy[-1]

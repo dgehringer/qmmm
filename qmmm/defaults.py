@@ -102,6 +102,9 @@ class ConfigBuilder(dict, LoggerMixin):
         else:
             return object.__getattribute__(self, item)
 
+    def __setattr__(self, key, value):
+        self.__setitem__(key, value)
+
     def queue(self, partition, **kwargs):
         if self._resource not in REMOTE_CONFIG:
             raise KeyError('"{}" resource is not configured'.format(self._resource))
