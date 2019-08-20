@@ -212,6 +212,10 @@ class SLURMManager(AbstractJobManager):
             'mem': '--mem'
         }
         for k, v in switch_mapping.items():
+            if k == 'exclusive':
+                if not configuration[k]:
+                    # Exclusive is set to False
+                    continue
             start_script.append('#SBATCH {switch}{value}\n'.format(switch=v,
                                                                   value='={}'.format(configuration[k]) if not isinstance(configuration[k], bool) else ''))
 
