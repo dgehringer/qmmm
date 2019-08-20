@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from qmmm.core.utils import LoggerMixin
+from qmmm.core.event import Event
 from qmmm.core.utils import ready, run_once, working_directory
 
 
@@ -13,6 +14,10 @@ class AbstractCalculationSet(LoggerMixin, metaclass=ABCMeta):
         self._calculation_mapping = {}
         self._prefix = prefix
         self._working_directory = working_directory(self._name, delete=self._delete, prefix=self._prefix)
+        self.calculation_starting = Event()
+        self.calculation_started = Event()
+        self.started = Event()
+        self.finished = Event()
 
     @abstractmethod
     def get_parameter_configurations(self, **kwargs):
@@ -86,6 +91,7 @@ class AbstractCalculationSet(LoggerMixin, metaclass=ABCMeta):
         self._ready = ready(self._calculations, run=False)
 
     def _run(self, **kwargs):
+        self.started.fire()
         for config in self.get_parameter_configurations(**kwargs):
             # Get a meaningful name for the calculation
             calculation_name = self.get_calculation_name(**config)
@@ -97,9 +103,13 @@ class AbstractCalculationSet(LoggerMixin, metaclass=ABCMeta):
             calculation = cls_(structure, calculation_name)
             combined = config.copy()
             combined.update(kwargs)
+            # Fire execution callbacks
+            self.calculation_starting.fire(calculation)
             calculation = run_once(calculation, **self.get_calculation_config(**combined))
+            self.calculation_started.fire(calculation)
             self._calculation_mapping[calculation.id] = config
             self._calculations.append(calculation)
+        self.finished.fire()
 
     def __enter__(self):
         # We want to have access to all the calculations in the folder

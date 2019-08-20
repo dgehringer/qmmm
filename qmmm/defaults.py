@@ -103,7 +103,10 @@ class ConfigBuilder(dict, LoggerMixin):
             return object.__getattribute__(self, item)
 
     def __setattr__(self, key, value):
-        self.__setitem__(key, value)
+        if key.startswith('_'):
+            super(ConfigBuilder, self).__setattr__(key, value)
+        else:
+            self.__setitem__(key, value)
 
     def queue(self, partition, **kwargs):
         if self._resource not in REMOTE_CONFIG:

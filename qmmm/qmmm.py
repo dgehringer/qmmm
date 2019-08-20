@@ -1,5 +1,5 @@
 from qmmm.core.actions.actions import CheckStep, ActionState, CheckForce, GradientDescent, ApplyPositions
-from qmmm.core.actions.templates import LAMMPSRelaxation, LAMMPSStatic, VASPStatic
+from qmmm.core.actions.templates import LAMMPSRelaxation, LAMMPSStatic, VASPRelaxation
 from qmmm.core.actions.workflow import Workflow
 from qmmm.core.utils import flatten, is_iterable
 from qmmm.core.actions.utils import Pointer as pointer
@@ -35,7 +35,7 @@ class QMMMCalculation(Workflow):
         self.mm_check_forces = CheckForce('mm_check_forces')
         self.mm_relaxation_two = LAMMPSRelaxation('mm_relaxation_two')
         self.mm_static = LAMMPSStatic('mm_static')
-        self.qm_relaxation_one = LAMMPSRelaxation('qm_relaxation')
+        self.qm_relaxation_one = VASPRelaxation('qm_relaxation')
 #        self.qm_gradient_descent = GradientDescent('qm_gradient_descent')
         self.qm_apply_core = ApplyPositions('qm_apply_core')
         self.qm_apply_buffer = ApplyPositions('mm_apply_buffer')
@@ -66,10 +66,10 @@ class QMMMCalculation(Workflow):
         self.mm_static.input.args = pointer(self.input).lammps
         self.mm_static.setup.prefix = self._name+'-mm-one'
 
-        self.qm_relaxation_one.input.args = pointer(self.input).lammps
+        self.qm_relaxation_one.input.args = pointer(self.input).vasp
         self.qm_relaxation_one.input.potential = pointer(self.input).potential
-        #self.qm_static.input.incar = pointer(self.input).incar
-        #self.qm_static.input.kpoints = pointer(self.input).kpoints
+        self.qm_relaxation_one.input.incar = pointer(self.input).incar
+        self.qm_relaxation_one.input.kpoints = pointer(self.input).kpoints
         self.qm_relaxation_one.setup.prefix = self._name+'-qm-one'
         self.qm_relaxation_one.history = 2
 
