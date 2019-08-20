@@ -43,6 +43,10 @@ class Vasprun(object):
     def forces(self):
         return self._forces
 
+    def __getattr__(self, item):
+        # Fallback
+        return getattr(self._vasprun, item)
+
 
     def _read_forces(self):
         vasprun_etree = self._parse_etree_vasprun_xml(tag='varray')
