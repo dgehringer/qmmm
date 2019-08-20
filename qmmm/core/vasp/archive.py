@@ -1,24 +1,21 @@
 import abc
 import re
 import tarfile
-from tempfile import mkdtemp
 from os.path import exists, isfile, isdir, join
-from shutil import rmtree, copyfileobj
-from pymatgen.io.vasp import Oszicar
-from tempfile import NamedTemporaryFile
+import json
 from shutil import copyfileobj
 from io import StringIO
 from qmmm.core.vasp import potcar_from_string
 from tempfile import NamedTemporaryFile
 from os import listdir
 from os.path import isdir, isfile
-from qmmm.core.configuration import Configuration
 from qmmm.core.utils import get_configuration_directory, VASP_DIRECTORY, RESOURCE_DIRECTORY, LoggerMixin, remove_white
 import logging
 
-settings = Configuration()
 
 POTENTIAL_ARCHIVES = {}
+DEFAULT_CONFIG = 'defaults.json'
+DEFAULT_POTENTIALS = {}
 
 
 class PotentialException(Exception):
@@ -38,8 +35,9 @@ def copy_file(fsrc, fdst, length=16 * 1024):
 class PotentialArchive(LoggerMixin):
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, path):
+    def __init__(self, path, xc_func='gga'):
         self.path = path
+        self.xc_func = xc_func
 
     @staticmethod
     def copy_file(fsrc, fdst, length=16 * 1024):
@@ -61,7 +59,7 @@ class PotentialArchive(LoggerMixin):
         """ Returns a boolean wether the potential has a POTCAR and a PSCTR file """
 
     @abc.abstractmethod
-    def is_valid_archive(self):
+    def check_valid_archive(self):
         """Returns a boolean wether the archive is valid (all potentials are valid and all default potentials are available """
 
     @abc.abstractmethod
@@ -81,57 +79,12 @@ class PotentialArchive(LoggerMixin):
         """docstring"""
 
     def default_potential(self, element):
-        try:
-            return settings.get_option('potentials', element)
-        except:
-            raise PotentialException('No default potential found for {0}'.format(element))
-
-
-class ResultArchive(object):
-    __metaclass__ = abc.ABCMeta
-
-    def __init__(self, path):
-        self.path = path
-
-    @abc.abstractmethod
-    def is_valid_archive(self):
-        """Returns wether the archive is valid"""
-
-    @abc.abstractmethod
-    def kpoint_list(self):
-        """Returns a list of available k points"""
-
-    @abc.abstractmethod
-    def energy_list(self):
-        """Returns a list of energies"""
-
-    @abc.abstractmethod
-    def mesh(self):
-        """Returns a list of tuples of kpoints and corresponding energies"""
-
-    @abc.abstractmethod
-    def data(self):
-        """Returns a list of tuples of all data (cutoff, kpoint, total)"""
-
-    @abc.abstractmethod
-    def potcar(self):
-        """Returns a file object of the POTCAR file"""
-
-    @abc.abstractmethod
-    def poscar(self):
-        """Returns a file object of the POSCAR file"""
-
-    @abc.abstractmethod
-    def psctr(self):
-        """Returns a file object of the PSCTR file"""
-
-    @abc.abstractmethod
-    def kpoints(self):
-        """Returns a file object of the KPOINTS file"""
-
-    @abc.abstractmethod
-    def incar(self):
-        """Returns a file object of the INCAR file"""
+        global DEFAULT_POTENTIALS
+        if element not in DEFAULT_POTENTIALS[self.xc_func]:
+            raise PotentialException('No default potential configured for element "{}" for xc_type="{}"'
+                                     .format(element, self.xc_func))
+        else:
+            return DEFAULT_POTENTIALS[self.xc_func][element]
 
 
 class DirectoryPotentialArchive(PotentialArchive):
@@ -144,8 +97,8 @@ class DirectoryPotentialArchive(PotentialArchive):
                         lambda pth: isdir(join(self.path, pth)) and not pth.startswith('.'), listdir(self.path)
                 )
         )
-        if not self.is_valid_archive():
-            raise PotentialException('{} is not a valid VASP potential archive'.format(path))
+        #if not self.is_valid_archive():
+        #    raise PotentialException('{} is not a valid VASP potential archive'.format(path))
 
     def has_potential(self, identifier):
         return identifier in self._potential_directories
@@ -163,15 +116,15 @@ class DirectoryPotentialArchive(PotentialArchive):
         else:
             return False
 
-    def is_valid_archive(self):
+    def check_valid_archive(self):
         for potential in self.potentials():
             if not self.is_valid_potential(potential):
                 self.logger.warning('{} potential is corrupted'.format(potential))
                 return False
 
-        default_potentials = [settings.get_option('potentials', option) for option in settings.get_options('potentials')]
+        default_potentials = DEFAULT_POTENTIALS[self.xc_func]
 
-        for potential in default_potentials:
+        for element, potential in default_potentials.items():
             if not self.is_valid_potential(potential):
                 self.logger.warning('{} default potential is corrupted'.format(potential))
                 return False
@@ -207,18 +160,18 @@ class TarPotentialArchive(PotentialArchive):
         self._tarfile = tarfile.open(path, 'r:*')
         self._tarinfo = self._tarfile.getmembers()
         self._names = list(map(lambda info: info.name, self._tarinfo))
-        if not self.is_valid_archive():
-            raise PotentialException('{} is not a valid VASP potential archive'.format(path))
+        self.check_valid_archive()
+        #    raise PotentialException('{} is not a valid VASP potential archive'.format(path))
 
-    def is_valid_archive(self):
+    def check_valid_archive(self):
         for potential in self.potentials():
             if not self.is_valid_potential(potential):
                 self.logger.warning('{} default potential is corrupted'.format(potential))
                 return False
 
-        default_potentials = [settings.get_option('potentials', option) for option in settings.get_options('potentials')]
+        default_potentials = DEFAULT_POTENTIALS[self.xc_func]
 
-        for potential in default_potentials:
+        for element, potential in default_potentials.items():
             if not self.is_valid_potential(potential):
                 self.logger.warning('{} potential is corrupted'.format(potential))
                 return False
@@ -281,8 +234,12 @@ class TarPotentialArchive(PotentialArchive):
 
 
 def _make_porential_archives():
-    global POTENTIAL_ARCHIVES
-    functionals = ['lda', 'gga']
+    global POTENTIAL_ARCHIVES, DEFAULT_POTENTIALS
+    default_potential_config = join(get_configuration_directory(), RESOURCE_DIRECTORY, VASP_DIRECTORY, DEFAULT_CONFIG)
+    with open(default_potential_config, 'rb') as default_potential_config_file:
+        default_potentials = json.load(default_potential_config_file)
+        DEFAULT_POTENTIALS = default_potentials
+    functionals = list(default_potentials.keys())
     resources_directory = join(get_configuration_directory(), RESOURCE_DIRECTORY, VASP_DIRECTORY)
     found_directories = [f for f in listdir(resources_directory)
                          if f in functionals and isdir(join(resources_directory, f))]
@@ -339,13 +296,15 @@ def _extract_species(poscar):
 
 
 def construct_potcar(poscar, xc_func='gga'):
+    if xc_func == 'pbe':
+        xc_func = 'gga'
     archive = POTENTIAL_ARCHIVES[xc_func]
     functional = xc_func
     poscar_species = _extract_species(poscar)
     with NamedTemporaryFile() as final:
         for element in poscar_species:
             try:
-                default_potential = settings.get_option('potentials', element.lower())
+                default_potential = archive.default_potential(element)
             except PotentialException:
                 logging.getLogger().warning('No default POTCAR found for "{}" for element "{}"'.format(functional, element))
                 default_potential = element
