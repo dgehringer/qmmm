@@ -1,5 +1,6 @@
 from .configuration import Configuration
 from paramiko import SSHClient, RSAKey, DSSKey, ECDSAKey, AutoAddPolicy, SSHException
+from paramiko.buffered_pipe import PipeTimeout
 from os.path import exists, join
 import re
 from .utils import ThreadWithReturnValue, LoggerMixin, remove_white, intersect, StringStream
@@ -13,9 +14,17 @@ from shutil import copyfileobj
 from stat import S_ISDIR
 from .configuration import Configuration
 from os import mkdir, stat
-from logging import getLogger
 from atexit import register
 from datetime import datetime
+from logging import getLogger
+from uuid import uuid4
+
+_LOGGER = getLogger(__name__)
+
+# Make an id per session
+# Maintain a different connection at each module import
+__SESSION_ID = str(uuid4())
+_LOGGER.info('Current session is: "Session("{}")"'.format(__SESSION_ID))
 
 GLOBAL_CONNECTIONS = {
 
@@ -28,26 +37,37 @@ KEY_CLASS_MAPPING = {
 }
 
 def close_connection(user, host, logger):
-    global GLOBAL_CONNECTIONS
-    if (user, host) in GLOBAL_CONNECTIONS:
-        ssh_client, sftp_client,  _, _, _ = GLOBAL_CONNECTIONS[(user, host)]
+    global GLOBAL_CONNECTIONS, __SESSION_ID
+    if (user, host, __SESSION_ID) in GLOBAL_CONNECTIONS:
+        ssh_client, sftp_client, shell_channel, shell_stdin, shell_stdout = GLOBAL_CONNECTIONS[(user, host, __SESSION_ID)]
+        # Close input and output stream
+        if shell_stdout:
+            shell_stdout.close()
+        if shell_stdin:
+            shell_stdin.close()
+
+        # Next kill the transport
+        if shell_channel:
+            shell_channel.close()
+
         if sftp_client:
             sftp_client.close()
-            logger.info('Closed SFTP connection: "{}@{}!"'.format(user, host))
+            logger.info('Session("{}"): Closed SFTP connection: "{}@{}"!'.format(__SESSION_ID,user, host))
 
         if ssh_client:
             ssh_client.close()
-            logger.info('Closed SSH connection: "{}@{}!"'.format(user, host))
-        del GLOBAL_CONNECTIONS[((user, host))]
+            logger.info('Session("{}"): Closed SSH connection: "{}@{}"!'.format(__SESSION_ID, user, host))
+
+        del GLOBAL_CONNECTIONS[((user, host, __SESSION_ID))]
 
 
 def close_all_conection_on_system_exit():
-    global GLOBAL_CONNECTIONS
+    global GLOBAL_CONNECTIONS, __SESSION_ID
     module_logger = getLogger(__file__)
-    module_logger.info('Closing all connections because of system exit ...')
+    module_logger.info('Session("{}"): Closing all connections because of system exit ...'.format(__SESSION_ID))
     connection_keys = list(GLOBAL_CONNECTIONS.keys())
     for connection in connection_keys:
-        user, host = connection
+        user, host, _ = connection
         close_connection(user, host, module_logger)
 
 # Register close_all_conection_on_system_exit()
@@ -55,7 +75,7 @@ register(close_all_conection_on_system_exit)
 
 def get_connection(user, host, config, logger):
     global GLOBAL_CONNECTIONS
-    if (user, host) not in GLOBAL_CONNECTIONS:
+    if (user, host, __SESSION_ID) not in GLOBAL_CONNECTIONS:
         pkey = KEY_CLASS_MAPPING[config['key_type']].from_private_key_file(config['identity_file'])
         host = config['host']
         user = config['user']
@@ -71,13 +91,13 @@ def get_connection(user, host, config, logger):
             shell_stdin = shell_channel.makefile('wb')
             shell_stdout = shell_channel.makefile('r')
         except SSHException:
-            logger.exception('Failed to connect to {}@{}'.format(user, host))
+            logger.exception('Session("{}"): Failed to connect to {}@{}'.format(__SESSION_ID, user, host))
             close_connection(user, host, logger)
             raise
         else:
-            logger.info('Successfully established connection: "{}@{}"'.format(user, host))
-        GLOBAL_CONNECTIONS[(user, host)] = (ssh_client, sftp_client, shell_channel, shell_stdin, shell_stdout)
-    return GLOBAL_CONNECTIONS[(user, host)]
+            logger.info('Session("{}"): Successfully established connection: "{}@{}"'.format(__SESSION_ID, user, host))
+        GLOBAL_CONNECTIONS[(user, host, __SESSION_ID)] = (ssh_client, sftp_client, shell_channel, shell_stdin, shell_stdout)
+    return GLOBAL_CONNECTIONS[(user, host, __SESSION_ID)]
 
 
 class RemoteRunnerMixin(LoggerMixin):
@@ -197,7 +217,21 @@ class RemoteRunnerMixin(LoggerMixin):
         shout = []
         sherr = []
         exit_status = 0
-        for line in self._shell_stdout:
+        # set to non blocking mode
+        n_max_calls = 5
+        n_calls = 0
+        old_timeout = self._shell_channel.gettimeout()
+        self._shell_channel.settimeout(2.0)
+        while True:
+            try:
+                line = self._shell_stdout.readline()
+            except PipeTimeout as e:
+                self.logger.exception('No ouput recieved! I\ll try to flush the input', exc_info=e)
+                self._shell_input.flush()
+                n_calls += 1
+                if n_calls == n_max_calls:
+                    raise SSHException('Could not retrieve output from command "{}"'.format(cmd))
+                continue
             if str(line).startswith(cmd) or str(line).startswith(echo_cmd):
                 # up for now filled with shell junk from stdin
                 shout = []
@@ -237,7 +271,7 @@ class RemoteRunnerMixin(LoggerMixin):
             sherr.pop(0)
 
         # Pipe all processed output to
-
+        self._shell_channel.settimeout(old_timeout)
         return exit_status == 0 if not return_stdout else (exit_status, shout)
         #return shin, shout, sherr
 
