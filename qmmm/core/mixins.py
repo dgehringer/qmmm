@@ -223,7 +223,7 @@ class RemoteRunnerMixin(LoggerMixin):
             try:
                 line = self._shell_stdout.readline()
             except OSError as e:
-                self.logger.warning('No ouput recieved! I\'ll try to flush the input ({}/{})'.format(n_calls+1, n_max_calls), exc_info=e)
+                self.logger.warning('No ouput recieved! I\'ll try to flush the input ({}/{})'.format(n_calls+1, n_max_calls))#, exc_info=e)
                 self._shell_stdin.flush()
                 n_calls += 1
                 if n_calls == n_max_calls:
