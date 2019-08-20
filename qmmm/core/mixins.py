@@ -1,5 +1,5 @@
 from .configuration import Configuration
-from paramiko import SSHClient, RSAKey, DSSKey, ECDSAKey, AutoAddPolicy, SSHException
+from paramiko import SSHClient, RSAKey, DSSKey, ECDSAKey, AutoAddPolicy, SSHException,
 from paramiko.buffered_pipe import PipeTimeout
 from os.path import exists, join
 import re
@@ -225,8 +225,8 @@ class RemoteRunnerMixin(LoggerMixin):
         while True:
             try:
                 line = self._shell_stdout.readline()
-            except PipeTimeout as e:
-                self.logger.exception('No ouput recieved! I\ll try to flush the input', exc_info=e)
+            except OSError as e:
+                self.logger.warning('No ouput recieved! I\'ll try to flush the input ({}/{})'.format(n_calls+1, n_max_calls), exc_info=e)
                 self._shell_input.flush()
                 n_calls += 1
                 if n_calls == n_max_calls:
