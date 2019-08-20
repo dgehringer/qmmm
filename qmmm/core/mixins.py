@@ -1,14 +1,11 @@
-from .configuration import Configuration
-from paramiko import SSHClient, RSAKey, DSSKey, ECDSAKey, AutoAddPolicy, SSHException,
-from paramiko.buffered_pipe import PipeTimeout
+from paramiko import SSHClient, RSAKey, DSSKey, ECDSAKey, AutoAddPolicy, SSHException
 from os.path import exists, join
 import re
-from .utils import ThreadWithReturnValue, LoggerMixin, remove_white, intersect, StringStream
+from .utils import ThreadWithReturnValue, LoggerMixin, intersect, StringStream
 import os
 import tarfile
-from uuid import uuid4
 from subprocess import PIPE, Popen
-from io import TextIOWrapper, StringIO
+from io import TextIOWrapper
 from tempfile import NamedTemporaryFile
 from shutil import copyfileobj
 from stat import S_ISDIR
